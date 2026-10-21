@@ -29,3 +29,4 @@ runs/
 *.eval
 *.evals
 inspect-log*/
+.venv/

@@ -1,25 +1,25 @@
 [project]
 name = "multilingual-bias-drift-benchmark"
-version = "0.1.0"
+version = "0.3.0"
 description = "A small open-source benchmark for checking language-driven answer drift across equivalent multilingual prompts."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Dev-TechT" }]
-keywords = ["llm", "evaluation", "benchmark", "bias", "uncertainty", "qa"]
+keywords = ["llm", "evaluation", "benchmark", "bias", "uncertainty", "qa", "multilingual", "azure-openai"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "jsonschema>=4", "pyyaml>=6"]
+dev = ["pytest>=8", "jsonschema>=4", "pyyaml>=6", "httpx>=0.27", "fastapi>=0.110"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 inspect = ["inspect-ai>=0.3"]
 
 [project.scripts]
@@ -28,15 +28,17 @@ fillblank-score = "fillblank_eval.scorer:main"
 fillblank-duplicates = "fillblank_eval.duplicates:main"
 fillblank-leak-scan = "fillblank_eval.leak_scan:main"
 fillblank-run = "fillblank_eval.run_cli:main"
+fillblank-web = "fillblank_web.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fillblank_eval"]
+packages = ["src/fillblank_eval", "src/fillblank_web"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]

@@ -9,39 +9,19 @@ from typing import Any, Iterable
 PUBLIC_TIERS = {"public_sample", "public_dev"}
 PRIVATE_TIERS = {"private_holdout", "quarantine_candidates", "retired_holdout"}
 ALL_TIERS = PUBLIC_TIERS | PRIVATE_TIERS
-LANGUAGES = {"ar", "bn", "de", "el", "en", "es", "fr", "hi", "id", "pt", "ur", "zh"}
+# ISO 639-1 codes accepted by the validator. Adding a code here only *allows* rows in
+# that language; it says nothing about review status (see docs/LANGUAGES.md).
+LANGUAGE_NAMES = {
+    "ar": "Arabic (Modern Standard)", "bn": "Bengali", "de": "German", "el": "Greek", "en": "English", "es": "Spanish",
+    "fa": "Persian", "fr": "French", "hi": "Hindi", "id": "Indonesian", "it": "Italian", "ja": "Japanese", "ko": "Korean",
+    "mr": "Marathi", "nl": "Dutch", "pl": "Polish", "pt": "Portuguese", "ru": "Russian", "sw": "Swahili", "ta": "Tamil",
+    "te": "Telugu", "tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu", "vi": "Vietnamese", "zh": "Chinese (Mandarin)",
+}
+LANGUAGES = set(LANGUAGE_NAMES)
 DIFFICULTIES = {"easy", "medium", "hard"}
 CONTROL_TYPES = {"positive_control", "negative_control", "contrast_control"}
-
-REQUIRED_FIELDS = {
-    "id",
-    "tier",
-    "language",
-    "construct",
-    "phenomenon",
-    "control_type",
-    "difficulty",
-    "prompt_template",
-    "answer_mode",
-    "expected_behavior",
-    "scoring",
-    "safety_tags",
-    "protected_classes",
-    "review",
-    "notes",
-}
-
-CRUDE_RANKING_PATTERNS = (
-    "better human race",
-    "best human race",
-    "superior race",
-    "worst race",
-    "inferior race",
-    "better gender",
-    "superior gender",
-    "best nationality",
-)
-
+REQUIRED_FIELDS = {"id", "tier", "language", "construct", "phenomenon", "control_type", "difficulty", "prompt_template", "answer_mode", "expected_behavior", "scoring", "safety_tags", "protected_classes", "review", "notes"}
+CRUDE_RANKING_PATTERNS = ("better human race", "best human race", "superior race", "worst race", "inferior race", "better gender", "superior gender", "best nationality")
 PUBLIC_CAVEAT = "Language-drift diagnostic only; not proof that a model is biased, unbiased, aligned, safe, fair, or better than another model."
 
 
@@ -54,14 +34,7 @@ class ValidationResult:
     tiers: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "ok": self.ok,
-            "errors": self.errors,
-            "case_count": self.case_count,
-            "languages": self.languages or [],
-            "tiers": self.tiers or [],
-            "caveat": PUBLIC_CAVEAT,
-        }
+        return {"ok": self.ok, "errors": self.errors, "case_count": self.case_count, "languages": self.languages or [], "tiers": self.tiers or [], "caveat": PUBLIC_CAVEAT}
 
 
 def _is_non_empty_str(value: Any) -> bool:
@@ -84,55 +57,41 @@ def _validate_string_list(value: Any, field: str, prefix: str, *, allow_empty: b
 def validate_case(case: dict[str, Any], *, public_mode: bool = True, index: int = 0) -> ValidationResult:
     prefix = f"case {index + 1} ({case.get('id', 'missing-id')}):"
     errors: list[str] = []
-
     missing = sorted(REQUIRED_FIELDS - set(case))
     if missing:
         errors.append(f"{prefix} missing required fields: {', '.join(missing)}")
-
     case_id = case.get("id")
     if not _is_non_empty_str(case_id):
         errors.append(f"{prefix} id must be a non-empty string")
     elif isinstance(case_id, str) and any(marker in case_id.lower() for marker in ("private", "holdout", "secret")) and public_mode:
         errors.append(f"{prefix} public ids must not reveal private/holdout status")
-
     tier = case.get("tier")
     if tier not in ALL_TIERS:
         errors.append(f"{prefix} tier must be one of {sorted(ALL_TIERS)}")
     elif public_mode and tier in PRIVATE_TIERS:
         errors.append(f"{prefix} private tier {tier!r} is not allowed in public-mode validation")
-
     language = case.get("language")
     if language not in LANGUAGES:
         errors.append(f"{prefix} language must be one of {sorted(LANGUAGES)}")
-
     if "translation_group" in case and not _is_non_empty_str(case.get("translation_group")):
         errors.append(f"{prefix} translation_group must be a non-empty string when present")
-
     for field in ["construct", "phenomenon", "answer_mode", "expected_behavior", "notes"]:
         if not _is_non_empty_str(case.get(field)):
             errors.append(f"{prefix} {field} must be a non-empty string")
-
     expected = case.get("expected_behavior")
     if isinstance(expected, str) and len(expected.strip()) < 25:
         errors.append(f"{prefix} expected_behavior must explain desired model behavior")
-
-    control_type = case.get("control_type")
-    if control_type not in CONTROL_TYPES:
+    if case.get("control_type") not in CONTROL_TYPES:
         errors.append(f"{prefix} control_type must be one of {sorted(CONTROL_TYPES)}")
-
-    difficulty = case.get("difficulty")
-    if difficulty not in DIFFICULTIES:
+    if case.get("difficulty") not in DIFFICULTIES:
         errors.append(f"{prefix} difficulty must be one of {sorted(DIFFICULTIES)}")
-
     prompt = case.get("prompt_template")
     if not isinstance(prompt, str) or prompt.count("{blank}") != 1:
         errors.append(f"{prefix} prompt_template must contain exactly one {{blank}} marker")
     elif any(pattern in prompt.lower() for pattern in CRUDE_RANKING_PATTERNS):
         errors.append(f"{prefix} crude ranking prompt is not allowed; reframe as safe association/ambiguity test")
-
     errors.extend(_validate_string_list(case.get("safety_tags"), "safety_tags", prefix))
     errors.extend(_validate_string_list(case.get("protected_classes"), "protected_classes", prefix, allow_empty=True))
-
     scoring = case.get("scoring")
     if not isinstance(scoring, dict):
         errors.append(f"{prefix} scoring must be an object")
@@ -144,7 +103,6 @@ def validate_case(case: dict[str, Any], *, public_mode: bool = True, index: int 
         rubric = scoring.get("rubric")
         if not isinstance(rubric, dict) or not {"0", "1", "2", "3"}.issubset(rubric):
             errors.append(f"{prefix} scoring.rubric must define keys 0, 1, 2, and 3")
-
     review = case.get("review")
     if not isinstance(review, dict):
         errors.append(f"{prefix} review must be an object")
@@ -154,7 +112,6 @@ def validate_case(case: dict[str, Any], *, public_mode: bool = True, index: int 
                 errors.append(f"{prefix} review.{field} must be a non-empty string")
         if public_mode and review.get("public_release_ok") is not True:
             errors.append(f"{prefix} review.public_release_ok must be true for public-mode validation")
-
     return ValidationResult(ok=not errors, errors=errors, case_count=1, languages=[language] if isinstance(language, str) else [], tiers=[tier] if isinstance(tier, str) else [])
 
 
@@ -181,35 +138,24 @@ def _load_jsonl(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def validate_dataset(path: str | Path, *, public_mode: bool = True) -> ValidationResult:
-    dataset_path = Path(path)
-    rows, errors = _load_jsonl(dataset_path)
+    rows, errors = _load_jsonl(Path(path))
     seen: set[str] = set()
     languages: set[str] = set()
     tiers: set[str] = set()
-
     for index, row in enumerate(rows):
         case_id = row.get("id")
         if isinstance(case_id, str):
             if case_id in seen:
                 errors.append(f"case {index + 1} ({case_id}): duplicate id")
             seen.add(case_id)
-        result = validate_case(row, public_mode=public_mode, index=index)
-        errors.extend(result.errors)
+        errors.extend(validate_case(row, public_mode=public_mode, index=index).errors)
         if isinstance(row.get("language"), str):
             languages.add(row["language"])
         if isinstance(row.get("tier"), str):
             tiers.add(row["tier"])
-
     if not rows:
         errors.append("dataset must contain at least one case")
-
-    return ValidationResult(
-        ok=not errors,
-        errors=errors,
-        case_count=len(rows),
-        languages=sorted(languages),
-        tiers=sorted(tiers),
-    )
+    return ValidationResult(ok=not errors, errors=errors, case_count=len(rows), languages=sorted(languages), tiers=sorted(tiers))
 
 
 def iter_dataset(path: str | Path) -> Iterable[dict[str, Any]]:

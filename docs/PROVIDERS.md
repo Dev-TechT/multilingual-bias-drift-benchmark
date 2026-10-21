@@ -1,108 +1,61 @@
 # Provider setup
 
-`fillblank-run` runs the public fill-in-the-blank benchmark splits against either a credential-free mock provider or an OpenAI-compatible chat completions API.
+`fillblank-run` and the web app run the benchmark against one model per run. All HTTP providers share retries with backoff for 408/409/429/5xx and connection errors (honouring `Retry-After`, max 30 s), error messages that never echo response bodies, and content-filter handling.
 
-The runner is provider-agnostic at the result/report layer, but the first real provider transport is OpenAI-compatible `/chat/completions`.
+| `--provider` | Use for | Auth | Endpoint (`--base-url`) | `--model` |
+| --- | --- | --- | --- | --- |
+| `mock` | pipeline smoke test | none | – | `mock-model` |
+| `mock-drift` | demo of the live view / reports (synthetic!) | none | – | any |
+| `azure-openai` | Azure OpenAI deployments | `api-key` header | `https://<resource>.openai.azure.com` (or `.../openai/v1`) | **deployment name** |
+| `azure-foundry` | Azure AI Foundry model inference (Llama, Mistral, DeepSeek, Phi, …) | `api-key` header | `https://<resource>.services.ai.azure.com/models` | model name |
+| `github-models` | GitHub Models | GitHub PAT (`models:read`) | default `https://models.github.ai/inference` | e.g. `openai/gpt-4.1-mini` |
+| `openai-compatible` | OpenAI, vLLM, LiteLLM, LM Studio, … | Bearer | e.g. `https://api.openai.com/v1` | model name |
+| `ollama` | local models | none | default `http://localhost:11434/v1` | e.g. `llama3.1:8b` |
 
-## Credential-free smoke run
+Aliases: `openai`, `azure`, `foundry`, `github`. `fillblank-run --list-providers` prints the table as JSON.
 
-Use this first after cloning:
+## Credentials via environment variables
 
-```bash
-uv run fillblank-run --dry-run --limit 5 --out-dir runs/mock-smoke
+Generic variables (`FILLBLANK_BASE_URL`, `FILLBLANK_API_KEY`, `FILLBLANK_MODEL`, `FILLBLANK_API_VERSION`) win; otherwise each provider reads its usual variables:
+
+| Provider | Endpoint | Key | Model | API version |
+| --- | --- | --- | --- | --- |
+| azure-openai | `AZURE_OPENAI_ENDPOINT` | `AZURE_OPENAI_API_KEY` | `AZURE_OPENAI_DEPLOYMENT` | `AZURE_OPENAI_API_VERSION` (default `2024-10-21`) |
+| azure-foundry | `AZURE_AI_FOUNDRY_ENDPOINT` / `AZURE_INFERENCE_ENDPOINT` | `AZURE_AI_FOUNDRY_API_KEY` / `AZURE_INFERENCE_CREDENTIAL` | `AZURE_AI_FOUNDRY_MODEL` | default `2024-05-01-preview` |
+| github-models | – | `GITHUB_TOKEN` | `GITHUB_MODELS_MODEL` | – |
+| openai-compatible | `OPENAI_BASE_URL` | `OPENAI_API_KEY` | `OPENAI_MODEL` | – |
+| ollama | `OLLAMA_BASE_URL` | – | `OLLAMA_MODEL` | – |
+
+PowerShell:
+
+```powershell
+$env:UV_NATIVE_TLS = "true"   # company proxy
+$env:AZURE_OPENAI_ENDPOINT = "https://<resource>.openai.azure.com"
+$env:AZURE_OPENAI_API_KEY  = "<key>"
+uv run fillblank-run --provider azure-openai --model gpt-4o-mini --dataset examples/public_core24_15lang.jsonl --workers 4 --progress
 ```
 
-Expected artifacts:
+## Options
 
-- `runs/mock-smoke/results.jsonl` — one machine-readable row per case;
-- `runs/mock-smoke/summary.json` — aggregate machine-readable summary;
-- `runs/mock-smoke/report.md` — human-readable report;
-- `runs/mock-smoke/report.html` — browser-readable report.
+| Option | Default | Notes |
+| --- | --- | --- |
+| `--workers N` | 1 | parallel requests (1–16). Start with 2–4; rate limits apply. |
+| `--max-retries N` | 3 | retries for 429/5xx/timeouts |
+| `--temperature` / `--max-tokens` | 0 / 256 | reasoning models switch to `max_completion_tokens` automatically |
+| `--scorer judge` | heuristic | LLM judge, see below |
+| `--run-label TEXT` | – | stored in `run_metadata` |
+| `--out-dir` | mock: `runs/fillblank-public`; real: `~/.multilingual-bias-drift-benchmark/runs/<stamp>-<provider>-<model>` | artifacts |
 
-The mock provider does not call a network service and does not need credentials. Its scores are only a pipeline smoke test, not model evidence.
+## LLM judge (`--scorer judge`)
 
-## Default public split
+The heuristic scorer only matches phrases and misses most stereotypes outside English. With `--scorer judge` a second model classifies every answer into the four stances and the 0–3 rubric in any language. The heuristic result is kept (`heuristic_answer_stance`, `heuristic_score`); disagreements get `labels.judge_disagrees_with_heuristic = true` — review those first.
 
-Without `--dataset`, the runner evaluates these public files:
+Options: `--judge-provider`, `--judge-model`, `--judge-base-url`, `--judge-api-key`, `--judge-api-version` (env `FILLBLANK_JUDGE_*` or the judge provider's usual variables). Use a strong judge from a different model family, temperature 0, and calibrate on human-labelled rows. A single judge is not an official scorer (BENCHMARK_SPEC.md).
 
-- `examples/public_sample.jsonl`
-- `examples/public_dev.jsonl`
-- `examples/public_top10_sample.jsonl`
+## Content filters
 
-The top-10-language file is a small translation-assisted smoke sample. Its rows share a `translation_group`, so reports include a parallel-language summary for checking whether the same model behaves differently on the same underlying question across languages. Treat this as runner/scorer diagnostics, not native-reviewed language evidence.
+Blocked prompts/completions are recorded as **completed** with `answer_stance = refusal_void`, `labels.content_filtered = true`, and counted in `summary.content_filtered`. A filter that triggers in one language but not another is itself a drift signal.
 
-## Private/off-repo validation
+## Output guard and secrets
 
-The validator schema also recognizes private/off-repo tier names (`private_holdout`, `quarantine_candidates`, `retired_holdout`) so maintainers can validate local private files with `--allow-private`. Those rows must not be added to public dataset files or public CI artifacts.
-
-## Private/client output path guard
-
-`fillblank-run` has a fail-closed output guard for private/client or real-provider runs.
-
-Allowed under the public repository:
-
-- credential-free public/mock smokes such as `uv run fillblank-run --dry-run --limit 5 --out-dir runs/mock-smoke`.
-
-Rejected under the public repository:
-
-- `--run-scope private-client` outputs;
-- non-mock provider outputs;
-- output paths that look like client/private-holdout paths;
-- dataset paths or rows that indicate private tiers.
-
-For private/client work, write outputs outside the public checkout, for example:
-
-```bash
-uv run fillblank-run \
-  --run-scope private-client \
-  --dataset ~/.hermes/private/multilingual-bias-drift-benchmark/private_holdout.jsonl \
-  --out-dir ~/.hermes/private/multilingual-bias-drift-benchmark/client-runs/<run-id>/run-output
-```
-
-If a private/client or real-provider run tries to write under this public repo, the runner names the rejected path and points to `~/.hermes/private/multilingual-bias-drift-benchmark/client-runs/<run-id>` as the safe alternative.
-
-## OpenAI-compatible provider
-
-Set environment variables, then run the public split. Real provider outputs can include sensitive model output and metadata, so write them outside the public checkout:
-
-```bash
-export FILLBLANK_PROVIDER=openai-compatible
-export FILLBLANK_BASE_URL=https://api.openai.com/v1
-export FILLBLANK_API_KEY=sk-...
-export FILLBLANK_MODEL=gpt-4o-mini
-
-uv run fillblank-run --out-dir ~/.hermes/private/multilingual-bias-drift-benchmark/provider-runs/openai-compatible-public
-```
-
-Equivalent generic OpenAI-style names are also read when the `FILLBLANK_*` variables are absent:
-
-```bash
-export OPENAI_BASE_URL=https://api.openai.com/v1
-export OPENAI_API_KEY=sk-...
-export OPENAI_MODEL=gpt-4o-mini
-uv run fillblank-run --provider openai-compatible --out-dir ~/.hermes/private/multilingual-bias-drift-benchmark/provider-runs/provider-public
-```
-
-Useful options:
-
-```bash
-uv run fillblank-run \
-  --provider openai-compatible \
-  --base-url "$FILLBLANK_BASE_URL" \
-  --model "$FILLBLANK_MODEL" \
-  --limit 10 \
-  --timeout-seconds 90 \
-  --out-dir ~/.hermes/private/multilingual-bias-drift-benchmark/provider-runs/smoke-real-provider
-```
-
-## Secrets and raw responses
-
-Do not commit `.env` files, API keys, raw provider logs, or private holdout outputs.
-
-By default, `results.jsonl` stores the evaluated prompt text and model output text, but not raw provider JSON. The optional `--include-raw-response` flag is for local debugging only; avoid it when provider responses or metadata might contain sensitive data.
-
-## Public/private split boundary
-
-The public runner validates datasets in public mode before running. It rejects rows with private tiers such as `private_holdout`, `quarantine_candidates`, or `retired_holdout`.
-
-Private holdout rows and quarantine candidates must stay off-repo and out of public CI artifacts. If you build a maintainer-only private workflow later, keep its data paths outside this repository and publish only aggregate, reviewed summaries.
+The fail-closed public-repo output guard from v0.1 is unchanged. API keys never appear in `results.jsonl`, `summary.json`, reports or progress events (tested). `--include-raw-response` is for local debugging only.

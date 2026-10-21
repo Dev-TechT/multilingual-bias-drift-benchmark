@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Multilingual Bias Drift Benchmark</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Multilingual Bias Drift Benchmark</h1>
+      <p class="subtitle">Same question · same model · different language — does the answer change?</p>
+    </div>
+    <span id="version" class="pill"></span>
+  </header>
+
+  <p id="caveat" class="caveat"></p>
+  <div id="banner" class="banner hidden" role="alert"></div>
+
+  <main class="layout">
+    <section class="card" aria-labelledby="new-run-title">
+      <h2 id="new-run-title">1 · Test a model</h2>
+      <form id="run-form" autocomplete="off">
+        <fieldset>
+          <legend>Model under test</legend>
+          <label>Provider <select id="provider" required></select></label>
+          <label>Model / deployment
+            <input id="model" list="model-options" placeholder="e.g. gpt-4o-mini" maxlength="200">
+            <datalist id="model-options"></datalist>
+          </label>
+          <label class="endpoint-field">Endpoint (base URL) <input id="base-url" type="url" placeholder="https://..." maxlength="500"></label>
+          <label class="key-field">API key / token <input id="api-key" type="password" placeholder="used for this run only, never stored" maxlength="4000"></label>
+          <label class="version-field">API version <input id="api-version" placeholder="optional" maxlength="40"></label>
+          <p id="provider-hint" class="hint"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Question sets</legend>
+          <div id="dataset-list" class="checklist"></div>
+          <details>
+            <summary>Upload your own JSONL question set</summary>
+            <p class="hint">Same schema as <code>examples/*.jsonl</code>. Only public tiers are accepted.</p>
+            <input id="upload-file" type="file" accept=".jsonl,application/x-ndjson,application/json">
+            <button type="button" id="upload-btn" class="secondary">Validate &amp; upload</button>
+            <pre id="upload-result" class="small hidden"></pre>
+          </details>
+        </fieldset>
+
+        <details class="settings">
+          <summary>Advanced settings</summary>
+          <div class="grid2">
+            <label>Case limit <input id="limit" type="number" min="1" placeholder="all"></label>
+            <label>Parallel requests <input id="workers" type="number" min="1" max="16" value="4"></label>
+            <label>Temperature <input id="temperature" type="number" min="0" max="2" step="0.1" value="0"></label>
+            <label>Max tokens <input id="max-tokens" type="number" min="16" max="4096" value="256"></label>
+          </div>
+          <label>Scorer
+            <select id="scorer">
+              <option value="heuristic">Heuristic (fast, free, English-centric)</option>
+              <option value="judge">LLM judge + heuristic comparison (recommended for non-English)</option>
+            </select>
+          </label>
+          <div id="judge-box" class="subbox hidden">
+            <label>Judge provider <select id="judge-provider"></select></label>
+            <label>Judge model <input id="judge-model" list="judge-model-options" maxlength="200"><datalist id="judge-model-options"></datalist></label>
+            <label class="judge-endpoint-field">Judge endpoint <input id="judge-base-url" type="url" maxlength="500"></label>
+            <label class="judge-key-field">Judge API key <input id="judge-api-key" type="password" maxlength="4000"></label>
+            <label class="judge-version-field">Judge API version <input id="judge-api-version" maxlength="40"></label>
+          </div>
+          <label>Label <input id="label" maxlength="120" placeholder="optional, e.g. 'gpt-4o-mini baseline'"></label>
+        </details>
+
+        <button type="submit" id="start-btn" class="big-btn">Start test</button>
+      </form>
+    </section>
+
+    <section class="card" aria-labelledby="runs-title">
+      <div class="row-between">
+        <h2 id="runs-title">2 · Your runs</h2>
+        <button type="button" id="refresh-btn" class="secondary small-btn">Refresh</button>
+      </div>
+      <ul id="run-list" class="run-list"></ul>
+    </section>
+  </main>
+
+  <section id="detail" class="card wide hidden" aria-live="polite">
+    <div class="row-between">
+      <h2 id="detail-title">Run</h2>
+      <div class="actions" id="detail-actions"></div>
+    </div>
+    <div id="detail-status"></div>
+
+    <div class="verdict" id="verdict">
+      <span class="light" id="verdict-light"></span>
+      <div>
+        <div class="verdict-main" id="verdict-main"></div>
+        <div class="verdict-sub" id="verdict-sub"></div>
+      </div>
+    </div>
+    <div class="progress-big"><div class="bar big"><span id="progress-fill"></span></div><span id="progress-text"></span></div>
+
+    <div class="legend">
+      <span><i class="sw s-neutral_uncertain">✓</i> neutral / "not enough information" (or correct fact)</span>
+      <span><i class="sw s-pro_counter_stereotype">↔</i> pushes back on a stereotype</span>
+      <span><i class="sw s-anti_stereotype">!</i> stereotype / unsupported assumption</span>
+      <span><i class="sw s-refusal_void">–</i> refused / no answer</span>
+      <span><i class="sw pending"></i> waiting</span>
+    </div>
+
+    <div class="live-grid">
+      <div>
+        <h3>How does the model answer in each language?</h3>
+        <div id="lang-bars"></div>
+      </div>
+      <div>
+        <h3>Every question in every language <span class="hint">(a row with different colours = the answer changes with the language)</span></h3>
+        <div id="grid" class="scroll"></div>
+      </div>
+    </div>
+
+    <div id="final" class="hidden">
+      <h3>Numbers</h3>
+      <div id="cards" class="cards"></div>
+      <h3>Answer stance by language</h3>
+      <div id="lang-table" class="scroll"></div>
+      <h3>All answers</h3>
+      <div class="filters">
+        <label>Language <select id="filter-lang"><option value="">all</option></select></label>
+        <label>Stance <select id="filter-stance"><option value="">all</option></select></label>
+        <label>Question <select id="filter-group"><option value="">all</option></select></label>
+        <label class="inline"><input type="checkbox" id="filter-disagree"> judge ≠ heuristic</label>
+      </div>
+      <div id="cases" class="scroll"></div>
+      <details>
+        <summary>Interpretation &amp; run metadata</summary>
+        <p id="interpretation"></p>
+        <pre id="metadata" class="small"></pre>
+      </details>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <span>Language-drift QA signal only — not proof that a model is biased, unbiased, safe or better than another model.</span>
+    <a href="/api/docs" target="_blank" rel="noopener">API docs</a>
+  </footer>
+</body>
+</html>
