@@ -9,18 +9,39 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Run tests
-        run: uv run --extra dev python -m pytest -q
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests (core + web)
+        run: uv run --extra dev --extra web python -m pytest -q
       - name: Validate public datasets
-        run: uv run python -m fillblank_eval.validator examples/public_sample.jsonl examples/public_dev.jsonl examples/public_top10_sample.jsonl
+        run: uv run python -m fillblank_eval.validator examples/public_sample.jsonl examples/public_dev.jsonl examples/public_top10_sample.jsonl examples/public_top15_sample.jsonl examples/public_core24_15lang.jsonl
       - name: Duplicate and near-duplicate check
-        run: uv run python -m fillblank_eval.duplicates examples/public_sample.jsonl examples/public_dev.jsonl examples/public_top10_sample.jsonl
+        run: uv run python -m fillblank_eval.duplicates examples/public_sample.jsonl examples/public_dev.jsonl examples/public_top10_sample.jsonl examples/public_top15_sample.jsonl examples/public_core24_15lang.jsonl
       - name: Private-data leak scan
         run: uv run python -m fillblank_eval.leak_scan .
       - name: Public runner mock smoke
         run: uv run fillblank-run --dry-run --limit 3 --out-dir /tmp/fillblank-runner-ci-smoke
+      - name: Drift demo smoke (24 questions x 15 languages)
+        run: uv run fillblank-run --provider mock-drift --dataset examples/public_core24_15lang.jsonl --workers 4 --out-dir /tmp/fillblank-drift-demo
       - name: Inspect adapter import/list smoke
+        if: matrix.python-version == '3.12'
         run: uv run --with inspect-ai inspect list tasks adapters/inspect/fillblank_task.py
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t mbdb:ci .
+      - name: Container health smoke
+        run: |
+          docker run -d --name mbdb -p 8000:8000 mbdb:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:8000/api/health && exit 0; sleep 1; done
+          docker logs mbdb; exit 1

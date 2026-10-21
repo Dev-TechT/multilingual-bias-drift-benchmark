@@ -1,0 +1,19 @@
+# Local use:  docker compose up --build     then open http://localhost:8000
+# Optional:   copy .env.example to .env to pre-configure Azure / GitHub / Ollama models.
+services:
+  mbdb:
+    build: .
+    image: mbdb:0.3.0
+    ports:
+      - "127.0.0.1:8000:8000"   # localhost only; put a reverse proxy + auth in front for servers
+    env_file:
+      - path: .env
+        required: false        # needs Docker Compose v2.24+
+    volumes:
+      - mbdb-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach Ollama on your PC
+    restart: unless-stopped
+
+volumes:
+  mbdb-data:
