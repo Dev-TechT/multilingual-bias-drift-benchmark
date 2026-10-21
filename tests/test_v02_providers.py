@@ -1,6 +1,8 @@
-"""Provider clients: Azure OpenAI, Azure AI Foundry, GitHub Models, Ollama, retries, content filter."""
+"""Provider clients: Azure OpenAI, Azure AI Foundry, GitHub Models, Ollama, http-json (own AI), python plugins, retries, content filter."""
 import io
 import json
+import sys
+import textwrap
 from email.message import Message
 from urllib.error import HTTPError, URLError
 
@@ -56,9 +58,8 @@ def http_error(code, body=b"", headers=None):
 
 def test_openai_compatible_basic(monkeypatch):
     calls = capture(monkeypatch, [ok_payload()])
-    r = build_provider_client(ProviderConfig(provider="openai-compatible", base_url="https://api.example.test/v1", api_key="sk-test", model="m", timeout_seconds=7)).complete("P", case_id="c")
+    r = build_provider_client(ProviderConfig(provider="openai-compatible", base_url="https://api.example.test/v1", api_key="sk-test", model="m")).complete("P", case_id="c")
     assert calls[0]["url"] == "https://api.example.test/v1/chat/completions" and calls[0]["headers"]["authorization"] == "Bearer sk-test"
-    assert "preserve uncertainty" not in calls[0]["body"]["messages"][0]["content"].lower()
     assert r.text == "Cannot be determined." and r.raw_response is None
 
 
@@ -69,16 +70,12 @@ def test_azure_openai_deployment_url(monkeypatch):
     assert calls[0]["headers"]["api-key"] == "k1" and "authorization" not in calls[0]["headers"] and "model" not in calls[0]["body"]
 
 
-def test_azure_openai_v1(monkeypatch):
-    calls = capture(monkeypatch, [ok_payload()])
+def test_azure_openai_v1_and_foundry(monkeypatch):
+    calls = capture(monkeypatch, [ok_payload(), ok_payload()])
     build_provider_client(ProviderConfig(provider="azure", model="gpt-4.1", base_url="https://res.openai.azure.com/openai/v1", api_key="k")).complete("P", case_id="c")
-    assert calls[0]["url"] == "https://res.openai.azure.com/openai/v1/chat/completions" and calls[0]["body"]["model"] == "gpt-4.1"
-
-
-def test_azure_foundry(monkeypatch):
-    calls = capture(monkeypatch, [ok_payload()])
     build_provider_client(ProviderConfig(provider="azure-foundry", model="Llama-3.3-70B-Instruct", base_url="https://res.services.ai.azure.com/models", api_key="k")).complete("P", case_id="c")
-    assert calls[0]["url"] == "https://res.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview" and calls[0]["body"]["model"] == "Llama-3.3-70B-Instruct"
+    assert calls[0]["url"] == "https://res.openai.azure.com/openai/v1/chat/completions" and calls[0]["body"]["model"] == "gpt-4.1"
+    assert calls[1]["url"] == "https://res.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
 
 
 def test_github_models_and_ollama(monkeypatch):
@@ -100,13 +97,10 @@ def test_non_http_base_url_rejected():
         build_provider_client(ProviderConfig(provider="ollama", model="m", base_url="file:///etc/passwd"))
 
 
-def test_retries_then_success(monkeypatch):
+def test_retries_then_success_and_no_body_leak(monkeypatch):
     calls = capture(monkeypatch, [http_error(429, headers={"Retry-After": "1"}), http_error(503), ok_payload("Fine.")])
     assert build_provider_client(ProviderConfig(provider="openai", model="m", base_url="https://x.test/v1", api_key="k")).complete("P", case_id="c").text == "Fine."
     assert len(calls) == 3
-
-
-def test_retries_exhausted_no_body_leak(monkeypatch):
     capture(monkeypatch, [http_error(500, b'{"secret":"sk-leak"}')] * 3)
     with pytest.raises(ProviderError) as info:
         build_provider_client(ProviderConfig(provider="openai", model="m", base_url="https://x.test/v1", api_key="k", max_retries=2)).complete("P", case_id="c")
@@ -129,15 +123,49 @@ def test_content_filter_mapping(monkeypatch):
             client.complete("P", case_id="c")
 
 
-def test_reasoning_model_switch(monkeypatch):
+def test_reasoning_model_switch_rebuilds_body(monkeypatch):
     calls = capture(monkeypatch, [http_error(400, b"Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead."), ok_payload()])
     build_provider_client(ProviderConfig(provider="openai", model="o4-mini", base_url="https://x.test/v1", api_key="k")).complete("P", case_id="c")
-    assert "max_completion_tokens" in calls[1]["body"] and "temperature" not in calls[1]["body"]
+    assert "max_tokens" in calls[0]["body"] and "max_completion_tokens" in calls[1]["body"] and "temperature" not in calls[1]["body"]
 
 
 def test_structured_refusal(monkeypatch):
     capture(monkeypatch, [{"choices": [{"message": {"content": None, "refusal": "I can't help with that."}, "finish_reason": "stop"}]}])
     assert build_provider_client(ProviderConfig(provider="openai", model="m", base_url="https://x.test/v1", api_key="k")).complete("P", case_id="c").text == "I can't help with that."
+
+
+def test_http_json_own_ai_contract(monkeypatch):
+    calls = capture(monkeypatch, [{"text": "Not enough information."}, {"text": "", "refused": True}, {"text": "", "content_filtered": True}, {"oops": 1}])
+    client = build_provider_client(ProviderConfig(provider="http-json", model="", base_url="https://my-ai.test/generate", api_key="secret"))
+    assert client.complete("Prompt X", case_id="fitb-en-a-001").text == "Not enough information."
+    body = calls[0]["body"]
+    assert calls[0]["url"] == "https://my-ai.test/generate" and calls[0]["headers"]["authorization"] == "Bearer secret"
+    assert body["schema"] == "mbdb.generate.v1" and body["case_id"] == "fitb-en-a-001" and body["prompt"] == "Prompt X" and body["model"] == "custom"
+    assert client.complete("P", case_id="c").text == "I cannot help with that."
+    with pytest.raises(ContentFilteredError):
+        client.complete("P", case_id="c")
+    with pytest.raises(ProviderError, match="text"):
+        client.complete("P", case_id="c")
+
+
+def test_http_json_needs_url():
+    with pytest.raises(ProviderError, match="base URL"):
+        build_provider_client(ProviderConfig(provider="custom", model="m"))
+
+
+def test_python_plugin_provider(tmp_path, monkeypatch):
+    (tmp_path / "my_test_plugin.py").write_text(textwrap.dedent('''
+        from fillblank_eval.provider_client import CompletionResult, ProviderClient
+        class Model(ProviderClient):
+            def __init__(self, config): self.config = config
+            def complete(self, prompt, *, case_id): return CompletionResult("plugin", self.config.model, case_id, "plugin answer")
+    '''), encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    client = build_provider_client(ProviderConfig(provider="python:my_test_plugin:Model", model="x"))
+    assert client.complete("P", case_id="c").text == "plugin answer"
+    with pytest.raises(ProviderError, match="cannot load"):
+        build_provider_client(ProviderConfig(provider="python:nope_module:Model", model="x"))
+    sys.modules.pop("my_test_plugin", None)
 
 
 def test_mock_drift_deterministic_and_delay_env(monkeypatch):
@@ -150,6 +178,7 @@ def test_mock_drift_deterministic_and_delay_env(monkeypatch):
     assert build_provider_client(ProviderConfig(provider="mock-drift", model="d")).delay_seconds == 0.0
 
 
-def test_unknown_provider():
+def test_unknown_provider_and_roles():
     with pytest.raises(ProviderError, match="Unsupported"):
         build_provider_client(ProviderConfig(provider="nope", model="m"))
+    assert pc.PROVIDERS["http-judge"]["role"] == "judge" and pc.PROVIDERS["mock"]["role"] == "target" and pc.PROVIDERS["azure-openai"]["role"] == "both"

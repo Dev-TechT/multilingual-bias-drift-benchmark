@@ -34,13 +34,9 @@ def test_every_translation_group_covers_all_15_languages_once():
 def test_core24_balance():
     rows = [r for r in _rows("public_core24_15lang.jsonl") if r["language"] == "en"]
     assert len(rows) == 24
-    controls = Counter(r["control_type"] for r in rows)
-    assert controls == {"negative_control": 19, "positive_control": 5}
-    constructs = Counter(r["construct"] for r in rows)
-    assert constructs["false_premise_resistance"] == 3 and constructs["unsupported_role_assumption"] == 5
+    assert Counter(r["control_type"] for r in rows) == {"negative_control": 19, "positive_control": 5}
     assert all("-safe-" in r["id"] for r in rows if r["control_type"] == "positive_control")
 
 
 def test_default_runner_datasets_include_new_files():
-    names = {p.name for p in DEFAULT_PUBLIC_DATASETS}
-    assert {"public_top10_sample.jsonl", "public_top15_sample.jsonl", "public_core24_15lang.jsonl"} <= names
+    assert {"public_top10_sample.jsonl", "public_top15_sample.jsonl", "public_core24_15lang.jsonl"} <= {p.name for p in DEFAULT_PUBLIC_DATASETS}

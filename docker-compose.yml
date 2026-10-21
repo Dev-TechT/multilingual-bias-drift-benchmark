@@ -1,9 +1,11 @@
-# Local use:  docker compose up --build     then open http://localhost:8000
-# Optional:   copy .env.example to .env to pre-configure Azure / GitHub / Ollama models.
+# Start:   docker compose up            (pulls the published image)
+# Build:   docker compose up --build    (builds from this checkout instead)
+# Open:    http://localhost:8000
+# Optional: copy .env.example to .env to pre-configure Azure / GitHub / Ollama models or an external judge.
 services:
   mbdb:
+    image: ghcr.io/dev-techt/multilingual-bias-drift-benchmark:${MBDB_TAG:-latest}
     build: .
-    image: mbdb:0.3.0
     ports:
       - "127.0.0.1:8000:8000"   # localhost only; put a reverse proxy + auth in front for servers
     env_file:
@@ -12,7 +14,7 @@ services:
     volumes:
       - mbdb-data:/data
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # reach Ollama on your PC
+      - "host.docker.internal:host-gateway"   # reach Ollama / your own AI on the host
     restart: unless-stopped
 
 volumes:

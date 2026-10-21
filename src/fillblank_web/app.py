@@ -1,12 +1,17 @@
 """FastAPI web app for the Multilingual Bias Drift Benchmark.
 
-Start locally:   fillblank-web --open      (or: start.ps1 on Windows)
-Container:       docker compose up --build
+Local:      fillblank-web --open
+Container:  docker run -p 127.0.0.1:8000:8000 ghcr.io/dev-techt/multilingual-bias-drift-benchmark:latest
 """
 from __future__ import annotations
 
 import hmac
 import json
+import logging
+import os
+import threading
+import time
+from collections import deque
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Literal
@@ -26,6 +31,7 @@ from fillblank_eval.validator import LANGUAGE_NAMES, PUBLIC_CAVEAT
 from .runs import TERMINAL, RunManager
 from .settings import Settings
 
+log = logging.getLogger("mbdb.web")
 STATIC_DIR = Path(__file__).parent / "static"
 ARTIFACTS = {"summary.json": "application/json", "results.jsonl": "application/x-ndjson", "report.md": "text/markdown; charset=utf-8",
              "report.html": "text/html; charset=utf-8", "run_events.jsonl": "application/x-ndjson"}
@@ -50,6 +56,7 @@ class RunRequest(EndpointSpec):
     workers: int = Field(default=1, ge=1, le=16)
     scorer: Literal["heuristic", "judge"] = "heuristic"
     judge: EndpointSpec | None = None
+    judge_min_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     label: str | None = Field(default=None, max_length=120)
 
     @field_validator("datasets")
@@ -73,16 +80,48 @@ def _is_local_host(hostname: str) -> bool:
     return address.is_loopback or address.is_private
 
 
+class RateLimiter:
+    """Sliding-window limit for state-changing requests per client IP (MBDB_RATE_LIMIT_PER_MINUTE; 0 = off)."""
+
+    def __init__(self, per_minute: int) -> None:
+        self.per_minute = per_minute
+        self._hits: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, client: str) -> bool:
+        if self.per_minute <= 0:
+            return True
+        now = time.monotonic()
+        with self._lock:
+            hits = self._hits.setdefault(client, deque())
+            while hits and now - hits[0] > 60:
+                hits.popleft()
+            if len(hits) >= self.per_minute:
+                return False
+            hits.append(now)
+            if len(self._hits) > 10_000:  # bound memory
+                self._hits = {k: v for k, v in self._hits.items() if v and now - v[-1] <= 60}
+            return True
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     manager = RunManager(settings)
+    limiter = RateLimiter(settings.rate_limit_per_minute)
     app = FastAPI(title="Multilingual Bias Drift Benchmark", version=__version__, docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
     app.state.settings = settings
     app.state.manager = manager
 
     @app.middleware("http")
-    async def security_headers(request: Request, call_next):
+    async def security_and_limits(request: Request, call_next):
+        if request.method in {"POST", "DELETE"} and request.url.path.startswith("/api/"):
+            client = request.client.host if request.client else "unknown"
+            if not limiter.allow(client):
+                return JSONResponse({"detail": "rate limit exceeded, try again in a minute"}, status_code=429, headers={"Retry-After": "60"})
+        started = time.monotonic()
         response = await call_next(request)
+        if request.url.path.startswith("/api/") and request.method != "GET":
+            log.info("%s %s -> %s (%d ms)", request.method, request.url.path, response.status_code, int((time.monotonic() - started) * 1000))
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
@@ -111,6 +150,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(422, f"{role}: unsupported provider {spec.provider!r}")
         if provider not in settings.enabled_providers:
             raise HTTPException(422, f"{role}: provider {provider!r} is disabled on this server")
+        provider_role = PROVIDERS[provider].get("role", "both")
+        if role == "model" and provider_role == "judge":
+            raise HTTPException(422, f"model: {provider!r} can only be used as a judge")
+        if role == "judge" and provider_role == "target":
+            raise HTTPException(422, f"judge: {provider!r} cannot be used as a judge")
         if spec.profile:
             profile = settings.profiles.get(spec.profile)
             if profile is None or profile.provider != provider:
@@ -123,7 +167,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return {"provider": provider, "model": model, "base_url": profile.base_url, "api_key": profile.api_key, "api_version": spec.api_version or profile.api_version}
         if provider in MOCK_PROVIDERS:
             return {"provider": provider, "model": spec.model or "mock-model", "base_url": None, "api_key": None, "api_version": None}
-        if not spec.model:
+        model = spec.model or ("custom" if provider in {"http-json", "http-judge"} else "")
+        if not model:
             raise HTTPException(422, f"{role}: a model/deployment name is required")
         if spec.api_key and not settings.allow_user_keys:
             raise HTTPException(422, f"{role}: user-supplied API keys are disabled; use a server profile")
@@ -139,7 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(422, f"{role}: plain http is only allowed for local endpoints; use https")
         elif PROVIDERS[provider].get("needs_base_url"):
             raise HTTPException(422, f"{role}: base_url is required for {provider}")
-        return {"provider": provider, "model": spec.model, "base_url": spec.base_url, "api_key": spec.api_key, "api_version": spec.api_version}
+        return {"provider": provider, "model": model, "base_url": spec.base_url, "api_key": spec.api_key, "api_version": spec.api_version}
 
     def public_endpoint_view(spec: EndpointSpec | None, resolved: dict[str, Any] | None) -> dict[str, Any] | None:
         if spec is None or resolved is None:
@@ -157,6 +202,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> dict[str, Any]:
         return {"status": "ok", "version": __version__}
 
+    @app.get("/api/ready")
+    def ready() -> JSONResponse:
+        checks = {"data_dir_writable": os.access(settings.data_dir, os.W_OK), "datasets_found": any(settings.datasets_dir.glob("*.jsonl"))}
+        return JSONResponse({"ready": all(checks.values()), "checks": checks, "active_runs": manager.active_count()}, status_code=200 if all(checks.values()) else 503)
+
     @app.get("/api/meta", dependencies=auth)
     def meta() -> dict[str, Any]:
         return {
@@ -165,7 +215,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "profiles": [p.public_view() for p in settings.profiles.values() if p.provider in settings.enabled_providers],
             "languages": LANGUAGE_NAMES,
             "limits": {"max_cases_per_run": settings.max_cases_per_run, "max_workers": settings.max_workers, "max_concurrent_runs": settings.max_concurrent_runs,
-                       "allow_user_keys": settings.allow_user_keys, "allow_custom_endpoints": settings.allow_custom_endpoints},
+                       "allow_user_keys": settings.allow_user_keys, "allow_custom_endpoints": settings.allow_custom_endpoints,
+                       "rate_limit_per_minute": settings.rate_limit_per_minute, "retention_days": settings.retention_days},
             "auth_required": bool(settings.app_token),
         }
 
@@ -210,11 +261,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "limit": limit, "workers": min(body.workers, settings.max_workers), "scorer": body.scorer,
             "judge_provider": judge["provider"] if judge else None, "judge_model": judge["model"] if judge else None,
             "judge_base_url": judge["base_url"] if judge else None, "judge_api_key": judge["api_key"] if judge else None,
-            "judge_api_version": judge["api_version"] if judge else None, "run_label": body.label,
+            "judge_api_version": judge["api_version"] if judge else None, "judge_min_confidence": body.judge_min_confidence, "run_label": body.label,
         }
         public_request = {"target": public_endpoint_view(body, target), "judge": public_endpoint_view(body.judge, judge), "datasets": body.datasets,
                           "limit": limit, "temperature": body.temperature, "max_tokens": body.max_tokens, "workers": config_kwargs["workers"],
-                          "scorer": body.scorer, "label": body.label}
+                          "scorer": body.scorer, "judge_min_confidence": body.judge_min_confidence if judge else None, "label": body.label}
         return manager.start(config_kwargs, public_request).public_view()
 
     @app.get("/api/runs/{run_id}", dependencies=auth)
@@ -286,4 +337,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
+logging.basicConfig(level=os.environ.get("MBDB_LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 app = create_app()

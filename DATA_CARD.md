@@ -1,81 +1,42 @@
-# Dataset Card: Multilingual Bias Drift Benchmark public examples
+# Dataset card: Multilingual Bias Drift Benchmark — public examples
 
-## Dataset summary
+## Summary
 
-This public dataset contains synthetic fill-in-the-blank QA cases in English, German, Greek, plus a small translation-assisted 10-language pilot sample.
+Synthetic fill-in-the-blank QA cases for detecting **language-driven answer drift**: the same underlying question in several languages, grouped by `translation_group`. For development, demos, regression tests and the hosted demo. Not a hidden benchmark; not for public model rankings.
 
-It is intended for development, documentation, runner smoke tests, and regression testing of language-driven answer drift. It is not a hidden benchmark and should not be used for public model rankings.
+## Files
 
-## What the data is for
+| File | Rows | Languages | Tier | Review status |
+| --- | ---: | --- | --- | --- |
+| `examples/public_sample.jsonl` | 12 | en, de, el | public_sample | reviewed |
+| `examples/public_dev.jsonl` | 105 | en, de, el | public_dev | reviewed |
+| `examples/public_top10_sample.jsonl` | 10 | top-10 set | public_sample | translation-assisted, unreviewed |
+| `examples/public_top15_sample.jsonl` | 35 | 15 | public_sample | translation-assisted, unreviewed |
+| `examples/public_core24_15lang.jsonl` | 360 | 15 | public_dev | translation-assisted, unreviewed |
+| **Total** | **522** | 17 | | |
 
-The dataset groups equivalent prompts with `translation_group` so the same model can be tested across language versions of the same underlying question.
+15-language set: en, zh, hi, es, ar, fr, bn, pt, ru, id, ur, de, ja, vi, tr. 27 translation groups cover all 15 (docs/QUESTIONS.md).
 
-The target signal is answer-stance drift, for example:
+## Constructs
 
-- anti/stereotype in English;
-- pro/counter-stereotype in Spanish;
-- neutral/uncertain in German;
-- refusal/void in another language.
-
-## Languages
-
-Core public sample/dev languages:
-
-- English (`en`)
-- German (`de`)
-- Greek (`el`)
-
-10-language pilot sample:
-
-- English (`en`)
-- Mandarin Chinese (`zh`)
-- Hindi (`hi`)
-- Spanish (`es`)
-- Standard Arabic (`ar`)
-- French (`fr`)
-- Bengali (`bn`)
-- Portuguese (`pt`)
-- Indonesian (`id`)
-- Urdu (`ur`)
-
-Source note: this top-10 list follows total-speaker rankings such as Statista's 2026 worldwide language-usage summary and Ethnologue's 2026 total-usage framing. It counts native plus second-language speakers and is used here only to prioritize pilot coverage.
-
-## Public dataset files included
-
-- `examples/public_sample.jsonl` (`public_sample` tier)
-- `examples/public_dev.jsonl` (`public_dev` tier)
-- `examples/public_top10_sample.jsonl` (`public_sample` tier; translation-assisted same-question pilot rows)
-
-No private holdout rows are included.
+Uncertainty preservation, unsupported role/gender assumption, nationality/culture essentialism, false-premise resistance, universal emotion generalisation, and positive controls (explicit facts, incl. counter-stereotypical ones) to detect over-refusal.
 
 ## Intended use
 
-- Validate runners/adapters.
-- Demonstrate schema and rubric patterns.
-- Exercise multilingual prompt plumbing across widely spoken languages.
-- Compare same-question `translation_group` rows for drift diagnostics.
-- Build private holdout processes safely.
-- Run local QA/regression smoke checks.
+Drift diagnostics and regression checks for multilingual LLM use; demos; teaching benchmark design. Compare runs only with identical data/scorer/settings (`run_metadata`).
 
-## Out-of-scope use
+## Out of scope
 
-- Broad model ranking.
-- Claims that a model is biased, unbiased, aligned, safe, compliant, fair, or production-ready.
-- Strong language-specific claims from translation-assisted rows.
-- Training models to pass private holdout items.
+Leaderboards, fairness/safety/compliance certification, statements about specific groups or countries.
+
+## Provenance and licence
+
+Synthetic, written for this project; non-English rows translation-assisted. MIT licence. No personal data.
 
 ## Known limitations
 
-- Public examples are synthetic and visible.
-- `public_top10_sample` rows are translation-assisted scaffolding and need native/competent review before strong interpretation.
-- Heuristic scoring is incomplete.
-- Multilingual examples need ongoing native/competent review.
-- The public set is not statistically representative of social harms.
+Unreviewed translations (grammatical gender in hi/ur/ru, case suffixes in tr); one row per language per question; public data may leak into model training.
 
-## Data construction
+## Privacy and tiers
 
-Rows are synthetic examples designed to illustrate constructs such as uncertainty preservation, unsupported role assumptions, false-premise resistance, and positive controls.
-
-## License
-
-MIT for repository content unless otherwise noted.
+Only `public_sample` / `public_dev` rows are published. Private tiers stay off-repo (DATA_TIERS.md).

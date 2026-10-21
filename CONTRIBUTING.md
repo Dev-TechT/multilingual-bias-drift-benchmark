@@ -4,65 +4,32 @@ Thanks for helping improve the Multilingual Bias Drift Benchmark.
 
 ## Good contributions
 
-- clearer docs;
-- validator/scorer bug fixes;
-- runner adapters;
-- public sample/dev cases with clear constructs;
-- duplicate/near-duplicate detection improvements;
-- better methodology notes;
-- reviewed language versions of the same underlying question.
+- native/competent review of translated rows (most valuable right now);
+- new same-question groups across the 15 languages;
+- provider adapters, judge relays, report/UI improvements, docs;
+- validator/scorer bug fixes and duplicate-detection improvements.
 
 ## Benchmark item checklist
 
-For any new case, include:
-
-- one primary construct;
-- one `{blank}` marker;
-- expected behavior;
-- rubric notes;
-- language and native/competent review status;
-- `translation_group` when the case is part of a same-question multilingual group;
-- protected classes list, even when empty;
-- provenance/license statement;
-- duplicate/near-duplicate check notes;
-- contamination risk note;
-- `review.public_release_ok=true` only when safe.
+For any new case: one primary construct; exactly one `{blank}`; expected behaviour; rubric; language and review status; `translation_group` for multilingual groups; protected classes (may be empty); provenance/licence; duplicate check; contamination note; `review.public_release_ok=true` only when safe.
 
 ## Do not contribute
 
-- slur-bait or shock-bait prompts;
-- race/gender/nationality ranking prompts;
-- private, client, personal, or scraped sensitive data;
-- private holdout rows, raw model/provider logs, credentials, or private reviewer notes;
-- claims that the benchmark proves a model is safe/aligned/unbiased/fair;
-- model leaderboard, winner, compliance, or production-readiness claims;
-- private holdout data.
+Slur-bait or shock-bait prompts; race/gender/nationality ranking prompts; private, client, personal or scraped data; private holdout rows, raw provider logs, credentials; claims that the benchmark proves a model safe/aligned/unbiased/fair; leaderboard or production-readiness claims.
 
-## Contribution and task templates
-
-Use the focused GitHub templates so issues stay small and public-safe:
-
-- Public case proposals: `.github/ISSUE_TEMPLATE/case-proposal.yml`
-- Agent-friendly adapter/reporting/tooling tasks: `.github/ISSUE_TEMPLATE/agent-task.yml`
-- Validator/adapter bug reports: `.github/ISSUE_TEMPLATE/bug.yml`
-- Pull request checklist: `.github/pull_request_template.md`
-
-For coding-agent tasks, include a narrow goal, explicit scope/non-goals, acceptance criteria, verification commands, and the privacy/claim boundary. Do not post private/client data or unsupported model claims in issue bodies, PR bodies, logs, screenshots, or artifacts.
-
-## Review process
-
-Data-changing PRs should get two reviews:
-
-1. methodology/safety review;
-2. language/quality review.
-
-Accepted public items normally go to `public_sample` or `public_dev`. Candidate ideas for future holdout should be transformed and reviewed privately; public PR acceptance does not mean the exact row becomes holdout data.
-
-## Running checks
+## Development
 
 ```bash
-uv run --with pytest python -m pytest -q
-uv run python -m fillblank_eval.validator examples/public_sample.jsonl examples/public_dev.jsonl examples/public_top10_sample.jsonl
-uv run python -m fillblank_eval.duplicates examples/public_sample.jsonl examples/public_dev.jsonl examples/public_top10_sample.jsonl
-uv run python -m fillblank_eval.leak_scan .
+python3 -m venv .venv && .venv/bin/pip install -e ".[web,dev]"
+.venv/bin/python -m pytest -q
+.venv/bin/python -m fillblank_eval.validator examples/*.jsonl
+.venv/bin/python -m fillblank_eval.duplicates examples/*.jsonl
+.venv/bin/python -m fillblank_eval.leak_scan .
+.venv/bin/fillblank-web --open
 ```
+
+Branch → pull request → CI green → merge. Data-changing PRs need a methodology/safety review and a language/quality review.
+
+## Templates
+
+Issue templates in `.github/ISSUE_TEMPLATE/` (case proposal, agent task, bug) and `.github/pull_request_template.md`. For coding-agent tasks include goal, scope/non-goals, acceptance criteria, verification commands and the privacy/claim boundary.

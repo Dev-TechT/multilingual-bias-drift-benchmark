@@ -1,50 +1,61 @@
-# Windows setup (step by step)
+# Windows setup
 
-## 1. Put the project in a local folder (not OneDrive)
+Company networks often inspect HTTPS traffic and cut large downloads. That breaks Python downloads by `uv` ("UnknownIssuer", "os error 10054") and the Microsoft Store Python alias does not help. The reliable path is **WSL (Ubuntu)**, which already contains Python.
 
-The Python environment (`.venv`) has thousands of files; inside OneDrive they would be synced. Copy the project to `C:\dev`:
+## Recommended: WSL
 
-```powershell
-New-Item -ItemType Directory -Path C:\dev -Force | Out-Null
-Copy-Item "$env:USERPROFILE\OneDrive - Friedhelm Loh Group\multilingual-bias-drift-benchmark-main" C:\dev\ -Recurse -Force
-```
-
-## 2. Unpack the update over it
-
-Downloads from Copilot/Teams usually land in `Downloads`, not in your user folder — that is why `Expand-Archive .\…zip` said the path does not exist.
+Check: `wsl -l -v` in PowerShell shows a distribution (e.g. Ubuntu). Then:
 
 ```powershell
-Expand-Archive "$env:USERPROFILE\Downloads\multilingual-bias-drift-benchmark-v0.3.0-update.zip" -DestinationPath C:\dev -Force
-cd C:\dev\multilingual-bias-drift-benchmark-main
+wsl -d Ubuntu
 ```
 
-The ZIP contains the folder `multilingual-bias-drift-benchmark-main`, so the files land in the right place and overwrite the old versions.
+```bash
+git clone https://github.com/Dev-TechT/multilingual-bias-drift-benchmark.git ~/mbdb
+cd ~/mbdb
+bash scripts/start-wsl.sh
+```
 
-## 3. Start
+Open **http://localhost:8000** in the Windows browser. If `localhost` does not work, use the address from `hostname -I`.
+
+Or from PowerShell in the project folder: `powershell -ExecutionPolicy Bypass -File .\start.ps1` (uses WSL automatically when present).
+
+### If pip reports `CERTIFICATE_VERIFY_FAILED` in WSL
+
+Export the Windows root certificates once (PowerShell):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start.ps1
+$out = "C:\dev\windows-roots.crt"
+Get-ChildItem Cert:\LocalMachine\Root | ForEach-Object {
+  "-----BEGIN CERTIFICATE-----"; [Convert]::ToBase64String($_.RawData, 'InsertLineBreaks'); "-----END CERTIFICATE-----"
+} | Set-Content -Encoding ascii $out
 ```
 
-The script installs everything into `.venv`, starts the app and opens http://127.0.0.1:8000. Add `-Test` to run the test suite first. Stop with `Ctrl+C`.
+and trust them in Ubuntu:
+
+```bash
+sudo cp /mnt/c/dev/windows-roots.crt /usr/local/share/ca-certificates/windows-roots.crt
+sudo update-ca-certificates
+```
+
+`start-wsl.sh` then uses the system certificate store automatically.
+
+## Alternatives
+
+| Situation | Command |
+| --- | --- |
+| Python 3.10+ installed (Software Center / python.org) | `.\start.ps1 -Mode python` |
+| uv + installed Python | `.\start.ps1 -Mode uv` (never downloads Python; uses `UV_SYSTEM_CERTS`) |
+| Docker/Podman with licence | `docker run --rm -p 127.0.0.1:8000:8000 ghcr.io/dev-techt/multilingual-bias-drift-benchmark:latest` |
 
 ## Troubleshooting
 
-| Message | Cause | Fix |
-| --- | --- | --- |
-| `invalid peer certificate: UnknownIssuer` | The company proxy re-signs HTTPS traffic; uv does not trust that certificate by default. | `start.ps1` sets `UV_NATIVE_TLS=true` (Windows certificate store). Manually: `$env:UV_NATIVE_TLS="true"` before any `uv` command. |
-| uv still cannot download Python | GitHub downloads blocked by proxy | Install Python 3.12 via Software Center / python.org, then `.\start.ps1 -NoUv`. |
-| `No pyproject.toml found` | Command run in the wrong folder | `cd C:\dev\multilingual-bias-drift-benchmark-main` first. |
-| `pip … SSL: CERTIFICATE_VERIFY_FAILED` | Same proxy issue for pip | `start.ps1` uses `--use-feature=truststore`; ask IT for the proxy root certificate if it persists. |
-| Script blocked (`running scripts is disabled`) | Execution policy | Use the `powershell -ExecutionPolicy Bypass -File .\start.ps1` form shown above. |
-| Port 8000 in use | Another app | `.\start.ps1 -Port 8080` |
-| `docker` not found / hangs | Docker Desktop not installed or not running | Not needed — use `start.ps1`. |
-
-## Manual commands (if you prefer)
-
-```powershell
-$env:UV_NATIVE_TLS = "true"
-uv sync --extra web --extra dev
-uv run python -m pytest -q
-uv run fillblank-web --open
-```
+| Message | Fix |
+| --- | --- |
+| `UV_NATIVE_TLS is deprecated` | harmless; current scripts use `UV_SYSTEM_CERTS` |
+| `Failed to extract archive … os error 10054` (uv Python download) | proxy cuts the download → use WSL or an installed Python |
+| `Python wurde nicht gefunden … Microsoft Store` | that is only the Store alias; install Python or use WSL |
+| `No pyproject.toml found` | run commands inside the project folder |
+| `ensurepip is not available` (WSL) | `sudo apt update && sudo apt install -y python3-venv` |
+| Port 8000 in use | `PORT=8080 bash scripts/start-wsl.sh` or `.\start.ps1 -Port 8080` |
+| Project in OneDrive | copy it to a local folder (`C:\dev` or WSL home); `.venv` has thousands of files |

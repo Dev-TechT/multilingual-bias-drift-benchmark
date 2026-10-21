@@ -1,34 +1,19 @@
-# Multilingual Bias Drift Benchmark roadmap
+# Roadmap
 
-## v0.1
+## Now (before public launch)
+- Native-speaker review of all translated rows (review sheet).
+- Verify Azure OpenAI, Azure AI Foundry, GitHub Models and Ollama against real endpoints.
+- Calibrate judges on hand-labelled answers; document recommended confidence thresholds.
+- Hugging Face demo Space; Azure Container Apps for internal use with Entra ID.
 
-- Public schema and validator.
-- Public sample/dev examples.
-- Heuristic scorer for local smoke tests.
-- Data-tier and release policies.
-- Adapter stubs.
-- Basic same-question language grouping through `translation_group`.
+## Next
+- More questions: ≥ 20–30 per construct and language; contrast controls.
+- Private holdout workflow for official numbers.
+- Run comparison view (model A vs. B, before/after a prompt change).
+- Queue-based workers for multi-replica deployments.
+- Optional per-user accounts and quotas.
 
-## v0.2
-
-- Inspect AI runner with documented command.
-- Near-duplicate detector for contributed cases.
-- More human-reviewed German and Greek examples.
-- More Spanish and top-language pilot examples for same-question drift checks.
-- Stronger scorer fixtures and report format.
-- First-class stance labels: `anti_stereotype`, `pro_counter_stereotype`, `neutral_uncertain`, `refusal_void`.
-- Better drift summaries by `translation_group`, including stance diversity and drift signal.
-- More positive controls to avoid over-refusal reward.
-
-## v0.3
-
-- Private holdout governance template.
-- Maintainer-only official scoring workflow.
-- Optional lm-evaluation-harness task integration.
-
-## Not planned until methodology improves
-
-- Public model leaderboard.
-- Claims about model safety/alignment/fairness.
-- Claims that a model is biased or unbiased from public sample/dev rows alone.
-- Publishing private holdout rows.
+## Later
+- Agent/trajectory evaluation (multi-turn answers).
+- More languages beyond the 15-language set where reviewers are available.
+- Export to evaluation platforms (Inspect AI, promptfoo, lm-evaluation-harness).
