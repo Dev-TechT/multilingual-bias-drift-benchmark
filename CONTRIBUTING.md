@@ -30,6 +30,13 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[web,dev]"
 
 Branch → pull request → CI green → merge. Data-changing PRs need a methodology/safety review and a language/quality review.
 
-## Templates
+## Contribution and task templates
 
-Issue templates in `.github/ISSUE_TEMPLATE/` (case proposal, agent task, bug) and `.github/pull_request_template.md`. For coding-agent tasks include goal, scope/non-goals, acceptance criteria, verification commands and the privacy/claim boundary.
+Use the focused GitHub templates so issues stay small and public-safe:
+
+- Public case proposals: .github/ISSUE_TEMPLATE/case-proposal.yml
+- Agent-friendly adapter/reporting/tooling tasks: .github/ISSUE_TEMPLATE/agent-task.yml
+- Validator/adapter bug reports: .github/ISSUE_TEMPLATE/bug.yml
+- Pull request checklist: .github/pull_request_template.md
+
+For coding-agent tasks, include a narrow goal, explicit scope/non-goals, acceptance criteria, verification commands, and the privacy/claim boundary. Do not post private/client data or unsupported model claims in issue bodies, PR bodies, logs, screenshots, or artifacts.
