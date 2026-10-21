@@ -1,12 +1,19 @@
-# Security and private-data policy
+# Security policy
 
-Please do not report private benchmark rows, private model outputs, secrets, or personal data in public issues.
+## Reporting
 
-If you find private data accidentally exposed:
+Please report vulnerabilities privately via GitHub **Security → Report a vulnerability** on this repository. Do not open public issues for security problems. Expect a first response within 7 days.
 
-1. do not copy it into a public issue;
-2. contact the maintainer privately if possible;
-3. provide only the path/commit reference and a short description;
-4. wait for maintainers to rotate/remove affected data.
+## Scope
 
-This project treats private holdout leakage as benchmark compromise, not only as a repository hygiene issue.
+The web app (`src/fillblank_web`), the runner/provider clients (`src/fillblank_eval`), the container image and the CI workflows.
+
+## Design principles
+
+- User API keys are held in memory for one run only and never persisted or returned (covered by tests).
+- Provider error bodies are never shown; secret-like strings in errors are redacted.
+- Strict CSP, no inline scripts, model output rendered as text.
+- SSRF controls (`MBDB_ALLOW_CUSTOM_ENDPOINTS`), rate limiting, upload validation, non-root container.
+- Private benchmark tiers must never enter the repo, images or CI artifacts (leak scan in CI).
+
+Operational hardening for public deployments: docs/PRODUCTION.md.

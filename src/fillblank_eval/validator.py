@@ -9,8 +9,7 @@ from typing import Any, Iterable
 PUBLIC_TIERS = {"public_sample", "public_dev"}
 PRIVATE_TIERS = {"private_holdout", "quarantine_candidates", "retired_holdout"}
 ALL_TIERS = PUBLIC_TIERS | PRIVATE_TIERS
-# ISO 639-1 codes accepted by the validator. Adding a code here only *allows* rows in
-# that language; it says nothing about review status (see docs/LANGUAGES.md).
+# ISO 639-1 codes accepted by the validator. Accepting a code says nothing about review status (docs/LANGUAGES.md).
 LANGUAGE_NAMES = {
     "ar": "Arabic (Modern Standard)", "bn": "Bengali", "de": "German", "el": "Greek", "en": "English", "es": "Spanish",
     "fa": "Persian", "fr": "French", "hi": "Hindi", "id": "Indonesian", "it": "Italian", "ja": "Japanese", "ko": "Korean",
@@ -42,15 +41,13 @@ def _is_non_empty_str(value: Any) -> bool:
 
 
 def _validate_string_list(value: Any, field: str, prefix: str, *, allow_empty: bool = False) -> list[str]:
-    errors: list[str] = []
     if not isinstance(value, list):
         return [f"{prefix} {field} must be a list"]
+    errors: list[str] = []
     if not allow_empty and not value:
         errors.append(f"{prefix} {field} must be a non-empty list")
-    for item in value:
-        if not _is_non_empty_str(item):
-            errors.append(f"{prefix} {field} must contain only non-empty strings")
-            break
+    if any(not _is_non_empty_str(item) for item in value):
+        errors.append(f"{prefix} {field} must contain only non-empty strings")
     return errors
 
 
@@ -63,7 +60,7 @@ def validate_case(case: dict[str, Any], *, public_mode: bool = True, index: int 
     case_id = case.get("id")
     if not _is_non_empty_str(case_id):
         errors.append(f"{prefix} id must be a non-empty string")
-    elif isinstance(case_id, str) and any(marker in case_id.lower() for marker in ("private", "holdout", "secret")) and public_mode:
+    elif public_mode and any(marker in case_id.lower() for marker in ("private", "holdout", "secret")):
         errors.append(f"{prefix} public ids must not reveal private/holdout status")
     tier = case.get("tier")
     if tier not in ALL_TIERS:
@@ -167,7 +164,7 @@ def iter_dataset(path: str | Path) -> Iterable[dict[str, Any]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate fillblank JSONL benchmark cases.")
-    parser.add_argument("paths", nargs="+", help="JSONL files to validate")
+    parser.add_argument("paths", nargs="+")
     parser.add_argument("--allow-private", action="store_true", help="Allow private tiers; never use for public release checks")
     args = parser.parse_args(argv)
     overall_ok = True

@@ -1,82 +1,72 @@
 <#
 .SYNOPSIS
-  Starts the Multilingual Bias Drift Benchmark web app on Windows (no Docker needed).
+  Starts the Multilingual Bias Drift Benchmark web app on Windows.
 
 .DESCRIPTION
-  - Uses the Windows certificate store, so corporate TLS inspection ("invalid peer certificate: UnknownIssuer") does not break downloads.
-  - Uses uv if installed (also installs Python if none is present), otherwise an installed Python (py / python).
-  - Creates .venv inside this folder, installs the app and opens http://127.0.0.1:8000.
+  Order of preference:
+    1. WSL (Ubuntu) if installed  -> runs scripts/start-wsl.sh inside WSL (recommended behind company proxies)
+    2. uv with an installed Python (no Python download)
+    3. installed Python + venv
+  Docker users: docker compose up  (see docs/DEPLOY.md)
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\start.ps1
-  powershell -ExecutionPolicy Bypass -File .\start.ps1 -Port 8080 -Test
+  powershell -ExecutionPolicy Bypass -File .\start.ps1 -Mode python -Port 8080
 #>
 param(
-    [int]$Port = 8000,
-    [switch]$Test,      # run the test suite before starting
-    [switch]$NoBrowser,
-    [switch]$NoUv       # ignore uv and use an installed Python instead
+    [ValidateSet("auto", "wsl", "uv", "python")] [string]$Mode = "auto",
+    [int]$Port = 8000
 )
 
-# "Continue": Windows PowerShell 5.1 would otherwise abort on harmless stderr output of native tools.
 $ErrorActionPreference = "Continue"
 Set-Location -Path $PSScriptRoot
-
 function Info($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Fail($msg) { Write-Host "FEHLER: $msg" -ForegroundColor Red; exit 1 }
 
-if (-not (Test-Path ".\pyproject.toml")) { Fail "pyproject.toml nicht gefunden. start.ps1 muss im Projektordner liegen (multilingual-bias-drift-benchmark-main)." }
-if ($PSScriptRoot -match "OneDrive") {
-    Write-Host "Hinweis: Der Ordner liegt in OneDrive. Die .venv mit tausenden Dateien wird dann mitsynchronisiert." -ForegroundColor Yellow
-    Write-Host "         Besser: Ordner nach C:\dev kopieren und dort starten." -ForegroundColor Yellow
-}
-
-# Corporate proxies re-sign TLS traffic. Trust the Windows certificate store instead of bundled CAs.
-$env:UV_NATIVE_TLS = "true"
+if (-not (Test-Path ".\pyproject.toml")) { Fail "pyproject.toml nicht gefunden. start.ps1 muss im Projektordner liegen." }
 $env:MBDB_DEMO_DELAY_SECONDS = "0.15"
-$browserArg = if ($NoBrowser) { @() } else { @("--open") }
 
-$uv = if ($NoUv) { $null } else { Get-Command uv -ErrorAction SilentlyContinue }
-if ($uv) {
-    Info "uv gefunden: $($uv.Source)"
-    Info "Abhaengigkeiten installieren (uv sync) ..."
-    uv sync --extra web --extra dev
-    if ($LASTEXITCODE -ne 0) { Fail "uv sync fehlgeschlagen. Tipp: mit -NoUv ein installiertes Python verwenden. Details: docs/WINDOWS_SETUP.md" }
-    if ($Test) {
-        Info "Tests ausfuehren ..."
-        uv run python -m pytest -q
-        if ($LASTEXITCODE -ne 0) { Fail "Tests fehlgeschlagen." }
+function Has-Wsl { try { $out = (wsl.exe -l -q 2>$null) -join ""; return ($LASTEXITCODE -eq 0 -and $out.Trim().Length -gt 0) } catch { return $false } }
+function Find-Python {
+    foreach ($candidate in @("py", "python")) {
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($cmd -and $cmd.Source -notmatch "WindowsApps") { return $candidate }
     }
-    Info "Starte Web-App auf http://127.0.0.1:$Port  (Beenden mit Strg+C)"
-    uv run fillblank-web --port $Port @browserArg
-    exit $LASTEXITCODE
+    return $null
 }
 
-# Fallback: installed Python
-$py = $null
-foreach ($candidate in @("py", "python")) {
-    $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-    if ($cmd -and $cmd.Source -notmatch "WindowsApps") { $py = $candidate; break }
+if ($Mode -eq "auto") {
+    if (Has-Wsl) { $Mode = "wsl" }
+    elseif ((Get-Command uv -ErrorAction SilentlyContinue) -and (Find-Python)) { $Mode = "uv" }
+    elseif (Find-Python) { $Mode = "python" }
+    else { Fail "Weder WSL noch Python gefunden. Optionen: WSL (wsl --install, Freigabe durch IT), Python 3.10+ aus dem Softwarecenter, oder Docker (docs/DEPLOY.md)." }
 }
-if (-not $py) { Fail "Weder uv noch Python gefunden. Installiere Python 3.10+ (Softwarecenter/python.org) oder uv, dann erneut starten." }
-Info "Python gefunden: $py"
 
-if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
-    Info "Virtuelle Umgebung anlegen (.venv) ..."
-    if ($py -eq "py") { py -3 -m venv .venv } else { python -m venv .venv }
+switch ($Mode) {
+    "wsl" {
+        Info "Starte in WSL (Ubuntu). Browser: http://localhost:$Port"
+        $wslPath = (wsl.exe wslpath -a "$PSScriptRoot").Trim()
+        wsl.exe bash -lc "set -e; mkdir -p ~/mbdb && rsync -a --delete --exclude .venv --exclude .git '$wslPath/' ~/mbdb/ 2>/dev/null || cp -r '$wslPath/.' ~/mbdb/; cd ~/mbdb && PORT=$Port bash scripts/start-wsl.sh"
+    }
+    "uv" {
+        $env:UV_SYSTEM_CERTS = "true"              # company TLS inspection: use the Windows certificate store
+        $env:UV_PYTHON_PREFERENCE = "only-system"   # never download Python (large downloads are often cut by proxies)
+        Info "uv sync (nutzt installiertes Python) ..."
+        uv sync --extra web
+        if ($LASTEXITCODE -ne 0) { Fail "uv sync fehlgeschlagen. Alternativ: .\start.ps1 -Mode wsl  oder  -Mode python" }
+        uv run fillblank-web --port $Port --open
+    }
+    "python" {
+        $py = Find-Python
+        if (-not $py) { Fail "Kein Python gefunden." }
+        if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+            Info "Virtuelle Umgebung anlegen (.venv) ..."
+            if ($py -eq "py") { py -3 -m venv .venv } else { python -m venv .venv }
+        }
+        Info "Paket installieren ..."
+        & ".\.venv\Scripts\python.exe" -m pip install -e ".[web]" --use-feature=truststore
+        if ($LASTEXITCODE -ne 0) { & ".\.venv\Scripts\python.exe" -m pip install -e ".[web]" }
+        if ($LASTEXITCODE -ne 0) { Fail "pip install fehlgeschlagen. Siehe docs/WINDOWS_SETUP.md." }
+        & ".\.venv\Scripts\fillblank-web.exe" --port $Port --open
+    }
 }
-$venvPy = ".\.venv\Scripts\python.exe"
-Info "Paket installieren ..."
-& $venvPy -m pip install -e ".[web,dev]" --use-feature=truststore
-if ($LASTEXITCODE -ne 0) {
-    Info "Zweiter Versuch ohne truststore-Flag ..."
-    & $venvPy -m pip install -e ".[web,dev]"
-    if ($LASTEXITCODE -ne 0) { Fail "pip install fehlgeschlagen. Siehe docs/WINDOWS_SETUP.md." }
-}
-if ($Test) {
-    Info "Tests ausfuehren ..."
-    & $venvPy -m pytest -q
-    if ($LASTEXITCODE -ne 0) { Fail "Tests fehlgeschlagen." }
-}
-Info "Starte Web-App auf http://127.0.0.1:$Port  (Beenden mit Strg+C)"
-& ".\.venv\Scripts\fillblank-web.exe" --port $Port @browserArg

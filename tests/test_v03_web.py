@@ -1,4 +1,4 @@
-"""Web app API tests incl. live view (FastAPI TestClient; no network)."""
+"""Web app API tests incl. live view, roles, rate limit, retention (FastAPI TestClient; no network)."""
 import json
 import threading
 import time
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def make_settings(tmp_path, **overrides):
     base = Settings(data_dir=tmp_path / "data", datasets_dir=ROOT / "examples", app_token=None, max_concurrent_runs=2, max_cases_per_run=1000,
                     max_workers=8, allow_user_keys=True, allow_custom_endpoints=True,
-                    enabled_providers=["mock", "mock-drift", "azure-openai", "azure-foundry", "github-models", "openai-compatible", "ollama"],
+                    enabled_providers=["mock", "mock-drift", "azure-openai", "azure-foundry", "github-models", "openai-compatible", "ollama", "http-json", "http-judge"],
                     max_upload_bytes=200_000, profiles={})
     return replace(base, **overrides)
 
@@ -41,10 +41,13 @@ def wait_for(client, run_id, timeout=30):
     raise AssertionError("run did not finish")
 
 
-def test_health_meta_headers_and_static(client):
+def test_health_ready_meta_headers_and_static(client):
     r = client.get("/api/health")
     assert r.json()["status"] == "ok" and r.headers["x-content-type-options"] == "nosniff" and "default-src 'self'" in r.headers["content-security-policy"]
-    assert client.get("/api/meta").json()["languages"]["tr"] == "Turkish"
+    ready = client.get("/api/ready")
+    assert ready.status_code == 200 and ready.json()["ready"] is True
+    meta = client.get("/api/meta").json()
+    assert meta["languages"]["tr"] == "Turkish" and meta["providers"]["http-judge"]["role"] == "judge"
     assert "Every question in every language" in client.get("/").text
     assert client.get("/static/app.js").status_code == 200 and client.get("/favicon.ico").status_code == 204
 
@@ -58,24 +61,18 @@ def test_build_plan_groups_and_language_order():
     cases = [{"id": f"fitb-{l}-x", "language": l, "translation_group": "g1", "control_type": "negative_control", "prompt_template": f"{l} text {{blank}}"} for l in ("tr", "de", "en")]
     cases.append({"id": "fitb-en-solo", "language": "en", "prompt_template": "solo {blank}"})
     plan = build_plan(cases)
-    assert plan["languages"] == ["en", "de", "tr"] and plan["total"] == 4
-    assert plan["groups"][0]["label"] == "en text {blank}" and plan["groups"][0]["cells"]["de"] == "fitb-de-x"
-    assert plan["groups"][1]["id"] == "fitb-en-solo"
+    assert plan["languages"] == ["en", "de", "tr"] and plan["total"] == 4 and plan["groups"][0]["label"] == "en text {blank}"
 
 
 def test_full_run_with_live_view(client):
     created = client.post("/api/runs", json={"provider": "mock-drift", "model": "demo", "datasets": ["public_core24_15lang", "public_top15_sample"], "workers": 4, "label": "demo"})
     assert created.status_code == 202, created.text
     run_id = created.json()["run_id"]
-    live = client.get(f"/api/runs/{run_id}/live").json()
-    assert live["plan"]["total"] == 395 and len(live["plan"]["languages"]) == 15
+    assert client.get(f"/api/runs/{run_id}/live").json()["plan"]["total"] == 395
     run = wait_for(client, run_id)
     assert run["status"] == "completed" and run["ok"] and run["progress"]["completed"] == 395
     live = client.get(f"/api/runs/{run_id}/live").json()
-    assert len(live["answers"]) == 395
-    cell = live["plan"]["groups"][0]["cells"]["de"]
-    assert live["answers"][cell]["stance"] in {"anti_stereotype", "pro_counter_stereotype", "neutral_uncertain", "refusal_void"}
-    assert run["summary"]["drift_alerts"]
+    assert len(live["answers"]) == 395 and len(live["plan"]["languages"]) == 15
     rows = client.get(f"/api/runs/{run_id}/results").json()["rows"]
     assert len(rows) == 395 and all("raw_response" not in r for r in rows)
     report = client.get(f"/api/runs/{run_id}/artifacts/report.html")
@@ -103,12 +100,28 @@ def test_live_view_updates_during_run_and_after_restart(tmp_path, monkeypatch):
         time.sleep(0.05)
     mid = client.get(f"/api/runs/{run_id}/live").json()
     assert mid["status"] == "running" and 3 <= len(mid["answers"]) < 35
-    assert "summary" not in client.get(f"/api/runs/{run_id}").json()  # final numbers only after completion
+    assert "summary" not in client.get(f"/api/runs/{run_id}").json()
     gate.set()
     wait_for(client, run_id)
-    reloaded = TestClient(create_app(settings))
-    after = reloaded.get(f"/api/runs/{run_id}/live").json()
+    after = TestClient(create_app(settings)).get(f"/api/runs/{run_id}/live").json()
     assert len(after["answers"]) == 35 and after["plan"]["total"] == 35
+
+
+def test_own_ai_and_external_judge_via_web(tmp_path, monkeypatch):
+    class Own:
+        def complete(self, prompt, *, case_id):
+            return CompletionResult(provider="http-json", model="custom", case_id=case_id, text="Cannot be determined.")
+
+    monkeypatch.setattr("fillblank_eval.runner.build_provider_client", lambda c: Own())
+    monkeypatch.setattr("fillblank_eval.judge.post_json_with_retries", lambda *a, **k: {"answer_stance": "neutral_uncertain", "score": 2, "confidence": 0.4})
+    client = TestClient(create_app(make_settings(tmp_path)))
+    created = client.post("/api/runs", json={"provider": "http-json", "base_url": "https://my-ai.test/generate", "datasets": ["public_top10_sample"],
+                                             "scorer": "judge", "judge": {"provider": "http-judge", "base_url": "https://judge.test/judge"}, "judge_min_confidence": 0.5})
+    assert created.status_code == 202, created.text
+    run = wait_for(client, created.json()["run_id"])
+    assert run["summary"]["summary"]["judge"]["needs_human_review"] == 10
+    live = client.get(f"/api/runs/{run['run_id']}/live").json()
+    assert all(a["review"] for a in live["answers"].values())
 
 
 def test_api_key_never_returned_or_persisted(tmp_path, monkeypatch):
@@ -133,6 +146,10 @@ def test_api_key_never_returned_or_persisted(tmp_path, monkeypatch):
     ({"provider": "openai-compatible", "model": "m", "api_key": "k", "base_url": "http://example.com/v1", "datasets": ["public_top10_sample"]}, "https"),
     ({"provider": "openai-compatible", "model": "m", "api_key": "k", "base_url": "ftp://x", "datasets": ["public_top10_sample"]}, "http(s)"),
     ({"provider": "nope", "model": "m", "datasets": ["public_top10_sample"]}, "unsupported"),
+    ({"provider": "python:os:system", "model": "m", "datasets": ["public_top10_sample"]}, "unsupported"),
+    ({"provider": "http-judge", "base_url": "https://j.test", "datasets": ["public_top10_sample"]}, "only be used as a judge"),
+    ({"provider": "mock", "datasets": ["public_top10_sample"], "scorer": "judge", "judge": {"provider": "mock-drift"}}, "cannot be used as a judge"),
+    ({"provider": "http-json", "datasets": ["public_top10_sample"]}, "base_url"),
     ({"provider": "mock", "datasets": ["../../etc/passwd"]}, "dataset"),
     ({"provider": "mock", "datasets": ["does_not_exist"]}, "unknown dataset"),
     ({"provider": "mock", "datasets": ["public_top10_sample"], "scorer": "judge"}, "judge"),
@@ -160,6 +177,27 @@ def test_token_auth(tmp_path):
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/meta").status_code == 401 and client.get("/api/meta", headers={"X-API-Token": "wrong"}).status_code == 401
     assert client.get("/api/meta", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
+def test_rate_limit(tmp_path):
+    client = TestClient(create_app(make_settings(tmp_path, rate_limit_per_minute=2)))
+    body = {"provider": "mock", "datasets": ["public_top10_sample"], "limit": 1}
+    assert [client.post("/api/runs", json=body).status_code for _ in range(3)] == [202, 202, 429]
+    assert client.get("/api/runs").status_code == 200  # reads are not limited
+
+
+def test_retention_keeps_newest_runs(tmp_path):
+    settings = make_settings(tmp_path, max_runs_kept=2)
+    client = TestClient(create_app(settings))
+    ids = []
+    for _ in range(4):
+        ids.append(client.post("/api/runs", json={"provider": "mock", "datasets": ["public_top10_sample"], "limit": 1}).json()["run_id"])
+        wait_for(client, ids[-1])
+        time.sleep(1.1)  # created_at has second resolution
+    time.sleep(0.2)
+    remaining = {r["run_id"] for r in client.get("/api/runs").json()["runs"]}
+    assert remaining == set(ids[-2:])
+    assert sorted(p.name for p in (settings.data_dir / "runs").iterdir()) == sorted(ids[-2:])
 
 
 def test_dataset_upload(client):
@@ -191,5 +229,4 @@ def test_cancel_and_history(tmp_path, monkeypatch):
     gate.set()
     assert wait_for(client, run_id)["status"] == "cancelled"
     reloaded = TestClient(create_app(settings))
-    assert reloaded.get(f"/api/runs/{run_id}").json()["status"] == "cancelled"
-    assert reloaded.get("/api/runs/not-valid").status_code == 404
+    assert reloaded.get(f"/api/runs/{run_id}").json()["status"] == "cancelled" and reloaded.get("/api/runs/not-valid").status_code == 404

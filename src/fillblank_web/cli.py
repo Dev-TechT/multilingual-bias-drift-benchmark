@@ -8,12 +8,12 @@ import webbrowser
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Start the Multilingual Bias Drift Benchmark web app.")
-    parser.add_argument("--host", default=os.environ.get("MBDB_HOST", "127.0.0.1"), help="Bind address (default 127.0.0.1; use 0.0.0.0 only behind auth/reverse proxy)")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("MBDB_PORT", "8000")))
+    parser.add_argument("--host", default=os.environ.get("MBDB_HOST", "127.0.0.1"), help="Bind address (127.0.0.1; use 0.0.0.0 in containers/WSL)")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT") or os.environ.get("MBDB_PORT") or "8000"))
     parser.add_argument("--open", action="store_true", help="Open the browser after start")
     parser.add_argument("--reload", action="store_true", help="Auto-reload for development")
     args = parser.parse_args(argv)
-    os.environ.setdefault("MBDB_DEMO_DELAY_SECONDS", "0.15")  # makes the mock-drift demo watchable live
+    os.environ.setdefault("MBDB_DEMO_DELAY_SECONDS", "0.15")
     try:
         import uvicorn
     except ImportError:  # pragma: no cover

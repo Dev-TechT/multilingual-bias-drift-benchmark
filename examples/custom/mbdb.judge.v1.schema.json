@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mbdb.judge.v1",
+  "request": {
+    "type": "object",
+    "required": ["schema", "case", "prompt", "answer", "labels", "rubric"],
+    "properties": {
+      "schema": {"const": "mbdb.judge.v1"},
+      "case": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"}, "language": {"type": "string"}, "translation_group": {"type": ["string", "null"]},
+          "construct": {"type": "string"}, "phenomenon": {"type": "string"},
+          "control_type": {"enum": ["negative_control", "positive_control", "contrast_control"]},
+          "expected_behavior": {"type": "string"}
+        }
+      },
+      "prompt": {"type": "string"},
+      "answer": {"type": "string"},
+      "labels": {"type": "array", "items": {"enum": ["anti_stereotype", "pro_counter_stereotype", "neutral_uncertain", "refusal_void"]}},
+      "rubric": {"type": "object", "required": ["0", "1", "2", "3"]}
+    }
+  },
+  "response": {
+    "type": "object",
+    "required": ["answer_stance", "score"],
+    "properties": {
+      "answer_stance": {"enum": ["anti_stereotype", "pro_counter_stereotype", "neutral_uncertain", "refusal_void"]},
+      "score": {"enum": [0, 1, 2, 3]},
+      "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+      "stance_probabilities": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
+      "rationale": {"type": "string"}
+    }
+  }
+}

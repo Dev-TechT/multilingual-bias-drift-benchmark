@@ -13,3 +13,4 @@ private/
 !.env.example
 dist/
 build/
+deploy/

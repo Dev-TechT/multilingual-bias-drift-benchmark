@@ -587,7 +587,7 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.156.5"
+version = "0.156.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -598,9 +598,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/24/46/1e2d7fac63a9d7b1d6f7b7bfc46b6845e0694cb70d11c34bc4ee18020474/fastapi-0.156.5.tar.gz", hash = "sha256:eff248c39b8512f9a192d7a682c6c972c0d42f209c21a5616a3919dc3162d2c4", size = 502181, upload-time = "2026-10-21T07:25:04.41Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6c/93/6e785df7ec0bdbfef9d7bf1044bc7bfabd6d22641d147e8326a1f2ba210b/fastapi-0.156.8.tar.gz", hash = "sha256:cee65bba7890cd85264b3b06c7fdf88e84ca3510d00d4018cdbc2ce629e1ff22", size = 504768, upload-time = "2026-10-21T08:45:18.817Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/d2/9632d849f0df3d51c267ac3fb08df5e2284e0a0b6d76e3cf52390ddf7611/fastapi-0.156.5-py3-none-any.whl", hash = "sha256:5f448ea9941c3be211f2a6f6e1e6cb2bf4886bf4191f8d623b1c70bcb2ce0b04", size = 147268, upload-time = "2026-10-21T07:25:02.578Z" },
+    { url = "https://files.pythonhosted.org/packages/21/93/b87423a73fad5b3b1de4f14a680a2d2344c442d5a1f297a0eb413b7572a3/fastapi-0.156.8-py3-none-any.whl", hash = "sha256:d5f2e052a5f985fb0bbe1114527938c25fedbe198a8197faae71c3d38851b7c3", size = 147358, upload-time = "2026-10-21T08:45:17.278Z" },
 ]
 
 [[package]]
@@ -1624,7 +1624,7 @@ wheels = [
 
 [[package]]
 name = "multilingual-bias-drift-benchmark"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 
 [package.optional-dependencies]

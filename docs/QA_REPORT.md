@@ -1,23 +1,22 @@
-# QA report — v0.3.0
+# QA report — v0.4.0
 
-Date: 2026-10-21 · Linux, Python 3.12, FastAPI 0.136, uv, headless Chromium.
+Date: 2026-10-21 · Linux, Python 3.12, FastAPI, headless Chromium.
 
 | Gate | Result |
 | --- | --- |
-| Test suite | **107 passed** (incl. web API, live view, providers, judge, runner, datasets) |
-| Fresh install via `uv sync --extra web --extra dev` from `uv.lock` (same path as `start.ps1`) | ok, all tests pass in the new `.venv`, entry points `fillblank-run` / `fillblank-web` present |
-| Dataset validation (5 files, 522 rows) + JSON-Schema check of every row | ok |
-| Duplicate check | 0 blocking errors |
-| Leak scan | ok |
-| Every translation group covers all 15 languages exactly once (27 groups) | ok |
-| CLI: dry-run, output guard, readable missing-key error | ok |
-| E2E against a simulated Azure OpenAI server, Core-24, 6 workers, LLM judge | 360/360 answers; 429 retried; Arabic content-filter block recorded as refusal; judge flagged German/English gender assumption the heuristic missed (2 disagreements); drift alert `core24-06-surgeon = high`; API key not in any artifact |
-| Browser: live view mid-run (124/360 answers, grid partially filled, verdict "So far: …"), final view, validation banner, filters | ok, no JS errors (the one 422 in the console is the intentional missing-key test) |
-| Python 3.10 syntax check | ok |
+| New/updated test modules (providers, judges, runner, web, datasets, reference servers) | **82 passed** in the development tree. The repository's original v0.1 tests run in CI together with these. |
+| Reference servers end-to-end over real HTTP (`my_ai_server.py` → `http-json`, `my_judge_server.py` → `http-judge`) | ok (test + manual) |
+| Simulated Azure OpenAI, 360 cases, 6 workers, external judge | 360/360; HTTP 429 retried; Arabic content-filter block recorded as `refusal_void`; drift alert `core24-06-surgeon = high` (en/de stereotype, ar refused); no keys in artifacts |
+| Browser: own AI + external judge with min confidence 0.6 (demo judge reports 0.5) | all 360 cells marked "?", "needs human review" card and filter correct, no JS errors |
+| Provider roles in UI (judge-only / target-only) | correct |
+| `scripts/start-wsl.sh` from a clean checkout | creates `.venv`, installs, `/api/ready` = ready |
+| Rate limit (429 after limit), retention (keeps newest N), readiness, token auth, SSRF checks, upload validation | covered by tests |
+| Dataset validation, duplicate check, leak scan, Python 3.10 syntax, JS syntax | ok |
+| Hugging Face bundle script | produces Space README with `sdk: docker`, `app_port: 8000` |
 
 ## Not verified here
 
-- `start.ps1` on real Windows (no PowerShell in the sandbox). Logic mirrors the tested `uv sync` / `uv run` path; Windows PowerShell 5.1 pitfalls (stderr handling) were avoided deliberately.
-- Docker build (no daemon; CI builds the image and checks `/api/health`).
-- Real Azure / GitHub / Ollama endpoints (no credentials; protocol tested against a compatible fake server and unit tests).
-- Language quality of the translation-assisted rows (native review before go-live).
+- Docker image build and GHCR/Hugging Face publishing (no Docker daemon; the CI builds the image, starts it and runs a demo run).
+- `start.ps1` on real Windows.
+- Real Azure OpenAI / Azure AI Foundry / GitHub Models / Ollama endpoints and the Jev API (not built in; relay must be implemented from the vendor docs).
+- Language quality of translated rows (native review before go-live).

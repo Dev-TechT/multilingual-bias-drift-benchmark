@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mbdb.generate.v1",
+  "request": {
+    "type": "object",
+    "required": ["schema", "case_id", "prompt"],
+    "properties": {
+      "schema": {"const": "mbdb.generate.v1"},
+      "case_id": {"type": "string"},
+      "model": {"type": "string"},
+      "prompt": {"type": "string"},
+      "system_prompt": {"type": "string"},
+      "max_tokens": {"type": "integer"},
+      "temperature": {"type": ["number", "null"]}
+    }
+  },
+  "response": {
+    "type": "object",
+    "required": ["text"],
+    "properties": {
+      "text": {"type": "string"},
+      "refused": {"type": "boolean"},
+      "content_filtered": {"type": "boolean"},
+      "finish_reason": {"type": "string"}
+    }
+  }
+}

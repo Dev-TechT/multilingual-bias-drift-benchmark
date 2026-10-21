@@ -1,4 +1,4 @@
-"""heuristic-v2 additions: 15-language uncertainty cues, negation/positive-control handling, empty output."""
+"""heuristic-v2: multilingual uncertainty cues, negation/positive-control handling, empty output."""
 import pytest
 
 from fillblank_eval.scorer import SCORER_VERSION, label_output, score_output

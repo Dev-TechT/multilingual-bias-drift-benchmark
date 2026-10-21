@@ -1,22 +1,20 @@
 """Background run management for the web app.
 
-- Runs execute in worker threads, limited by a semaphore (MBDB_MAX_CONCURRENT_RUNS).
-- API keys are passed to the runner in memory only. They are never written to disk,
-  never stored in run metadata and never returned by the API.
-- Each run writes the normal runner artifacts to ``<data_dir>/runs/<run_id>/`` plus a
-  sanitized ``meta.json`` (and ``plan.json`` for the live view) so history survives restarts.
-- The live view (``live_view``) exposes the planned question x language grid and every
-  answer stance as soon as it arrives.
+- Runs execute in worker threads, limited by MBDB_MAX_CONCURRENT_RUNS.
+- API keys stay in memory for the duration of the run; never written to disk, metadata or API responses.
+- Each run writes the runner artifacts to <data_dir>/runs/<run_id>/ plus a sanitized meta.json and plan.json.
+- Retention: MBDB_RETENTION_DAYS and MBDB_MAX_RUNS_KEPT delete old finished runs (startup + after each run).
 """
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +23,12 @@ from fillblank_eval.validator import validate_dataset
 
 from .settings import Settings
 
+log = logging.getLogger("mbdb.runs")
 RUN_ID_RE = re.compile(r"^[a-f0-9]{12}$")
 UPLOAD_ID_RE = re.compile(r"^upload-[a-f0-9]{12}$")
 BUILTIN_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
+LANGUAGE_ORDER = ["en", "de", "zh", "hi", "es", "ar", "fr", "bn", "pt", "ru", "id", "ur", "ja", "vi", "tr", "el"]
 
 
 def _now() -> str:
@@ -48,8 +48,7 @@ def build_plan(cases: list[dict[str, Any]]) -> dict[str, Any]:
             group["label"] = str(case.get("prompt_template", ""))[:160]
         if language not in languages:
             languages.append(language)
-    preferred = ["en", "de", "zh", "hi", "es", "ar", "fr", "bn", "pt", "ru", "id", "ur", "ja", "vi", "tr", "el"]
-    languages.sort(key=lambda lang: (preferred.index(lang) if lang in preferred else len(preferred), lang))
+    languages.sort(key=lambda lang: (LANGUAGE_ORDER.index(lang) if lang in LANGUAGE_ORDER else len(LANGUAGE_ORDER), lang))
     return {"languages": languages, "groups": list(groups.values()), "total": len(cases)}
 
 
@@ -73,18 +72,9 @@ class RunState:
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def public_view(self) -> dict[str, Any]:
-        return {
-            "run_id": self.run_id,
-            "status": self.status,
-            "created_at": self.created_at,
-            "started_at": self.started_at,
-            "finished_at": self.finished_at,
-            "request": self.request,
-            "progress": {"total": self.total, "completed": self.completed, "errors": self.errors, "last_case": self.last_event.get("case_id")},
-            "ok": self.ok,
-            "messages": self.messages[-20:],
-            "has_artifacts": (self.out_dir / "summary.json").is_file(),
-        }
+        return {"run_id": self.run_id, "status": self.status, "created_at": self.created_at, "started_at": self.started_at, "finished_at": self.finished_at,
+                "request": self.request, "progress": {"total": self.total, "completed": self.completed, "errors": self.errors, "last_case": self.last_event.get("case_id")},
+                "ok": self.ok, "messages": self.messages[-20:], "has_artifacts": (self.out_dir / "summary.json").is_file()}
 
 
 class RunManager:
@@ -98,6 +88,7 @@ class RunManager:
         self._lock = threading.Lock()
         self._slots = threading.BoundedSemaphore(settings.max_concurrent_runs)
         self._load_history()
+        self.apply_retention()
 
     # -- datasets --------------------------------------------------------------
     def builtin_datasets(self) -> list[dict[str, Any]]:
@@ -159,6 +150,10 @@ class RunManager:
             runs = list(self._runs.values())
         return [run.public_view() for run in sorted(runs, key=lambda run: run.created_at, reverse=True)]
 
+    def active_count(self) -> int:
+        with self._lock:
+            return sum(1 for run in self._runs.values() if run.status not in TERMINAL)
+
     def get(self, run_id: str) -> RunState | None:
         if not RUN_ID_RE.match(run_id or ""):
             return None
@@ -177,6 +172,7 @@ class RunManager:
             self._runs[run_id] = state
         self._write_meta(state)
         threading.Thread(target=self._execute, args=(state, config_kwargs), name=f"run-{run_id}", daemon=True).start()
+        log.info("run queued id=%s provider=%s cases=%s", run_id, config_kwargs.get("provider"), plan["total"])
         return state
 
     def cancel(self, run_id: str) -> bool:
@@ -198,15 +194,34 @@ class RunManager:
         shutil.rmtree(state.out_dir, ignore_errors=True)
         return True
 
+    def apply_retention(self) -> int:
+        """Delete finished runs older than MBDB_RETENTION_DAYS and beyond MBDB_MAX_RUNS_KEPT. Returns number deleted."""
+        with self._lock:
+            finished = sorted((r for r in self._runs.values() if r.status in TERMINAL), key=lambda r: r.created_at, reverse=True)
+        doomed: list[RunState] = []
+        if self.settings.retention_days:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=self.settings.retention_days)).isoformat()
+            doomed += [r for r in finished if (r.finished_at or r.created_at) < cutoff]
+        if self.settings.max_runs_kept:
+            doomed += finished[self.settings.max_runs_kept:]
+        deleted = 0
+        for run in {r.run_id: r for r in doomed}.values():
+            if self.delete(run.run_id):
+                deleted += 1
+        if deleted:
+            log.info("retention deleted %s run(s)", deleted)
+        return deleted
+
     def live_view(self, state: RunState) -> dict[str, Any]:
         plan = state.plan
         if plan is None and (state.out_dir / "plan.json").is_file():
             plan = json.loads((state.out_dir / "plan.json").read_text(encoding="utf-8"))
         answers = dict(state.live)
         results_path = state.out_dir / "results.jsonl"
-        if not answers and results_path.is_file():  # history after restart
+        if not answers and results_path.is_file():
             rows = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            answers = {row["case_id"]: {"stance": row.get("answer_stance"), "score": row.get("score"), "error": bool(row.get("error"))} for row in rows}
+            answers = {r["case_id"]: {"stance": r.get("answer_stance"), "score": r.get("score"), "error": bool(r.get("error")),
+                                      "review": bool((r.get("labels") or {}).get("needs_human_review"))} for r in rows}
             if plan is None:
                 plan = build_plan([{"id": r["case_id"], "language": r.get("language"), "translation_group": r.get("translation_group"),
                                     "control_type": r.get("control_type"), "construct": r.get("construct"), "prompt_template": ""} for r in rows])
@@ -218,11 +233,11 @@ class RunManager:
         if event_type == "run_started":
             state.total = int(event.get("case_count") or 0)
         elif event_type in {"case_completed", "case_failed"}:
-            # With parallel workers, events can arrive out of order: counters only grow.
             state.completed = max(state.completed, int(event.get("completed_count") or 0))
             state.errors = max(state.errors, int(event.get("error_count") or 0))
             state.last_event = {"case_id": event.get("case_id"), "type": event_type}
-            state.live[str(event.get("case_id"))] = {"stance": event.get("answer_stance") or "refusal_void", "score": event.get("score"), "error": event_type == "case_failed"}
+            state.live[str(event.get("case_id"))] = {"stance": event.get("answer_stance") or "refusal_void", "score": event.get("score"),
+                                                     "error": event_type == "case_failed", "review": bool(event.get("needs_human_review"))}
         elif event_type == "run_completed":
             state.completed = int(event.get("completed_count") or 0)
             state.errors = int(event.get("error_count") or 0)
@@ -244,19 +259,25 @@ class RunManager:
                 if state.cancel_event.is_set():
                     state.status = "cancelled"
                 elif (state.out_dir / "summary.json").is_file():
-                    state.status = "completed"  # may contain per-case errors; see ok/messages
+                    state.status = "completed"
                 else:
                     state.status = "failed"
             except Exception as exc:  # noqa: BLE001 - surface a safe message only
-                state.ok = False
-                state.status = "failed"
+                state.ok, state.status = False, "failed"
                 state.messages.append(f"internal error: {type(exc).__name__}")
+                log.exception("run failed id=%s", state.run_id)
             finally:
                 state.finished_at = _now()
                 self._write_meta(state)
+                log.info("run finished id=%s status=%s completed=%s errors=%s", state.run_id, state.status, state.completed, state.errors)
+        try:
+            self.apply_retention()
+        except Exception:  # noqa: BLE001
+            log.exception("retention failed")
 
     def _write_meta(self, state: RunState) -> None:
-        (state.out_dir / "meta.json").write_text(json.dumps(state.public_view(), ensure_ascii=False, indent=2), encoding="utf-8")
+        if state.out_dir.is_dir():
+            (state.out_dir / "meta.json").write_text(json.dumps(state.public_view(), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_history(self) -> None:
         for meta_path in self.runs_dir.glob("*/meta.json"):
@@ -268,10 +289,8 @@ class RunManager:
             if not isinstance(run_id, str) or not RUN_ID_RE.match(run_id):
                 continue
             status = meta.get("status", "interrupted")
-            if status not in TERMINAL:
-                status = "interrupted"
             progress = meta.get("progress") or {}
-            self._runs[run_id] = RunState(run_id=run_id, status=status, created_at=meta.get("created_at") or _now(), request=meta.get("request") or {},
-                                          out_dir=meta_path.parent, total=int(progress.get("total") or 0), completed=int(progress.get("completed") or 0),
-                                          errors=int(progress.get("errors") or 0), messages=list(meta.get("messages") or []),
-                                          started_at=meta.get("started_at"), finished_at=meta.get("finished_at"), ok=meta.get("ok"))
+            self._runs[run_id] = RunState(run_id=run_id, status=status if status in TERMINAL else "interrupted", created_at=meta.get("created_at") or _now(),
+                                          request=meta.get("request") or {}, out_dir=meta_path.parent, total=int(progress.get("total") or 0),
+                                          completed=int(progress.get("completed") or 0), errors=int(progress.get("errors") or 0),
+                                          messages=list(meta.get("messages") or []), started_at=meta.get("started_at"), finished_at=meta.get("finished_at"), ok=meta.get("ok"))
