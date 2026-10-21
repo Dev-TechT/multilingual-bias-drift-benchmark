@@ -17,7 +17,7 @@ jobs:
     if: ${{ vars.HF_SPACE != '' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build Space bundle
         run: bash scripts/build_hf_space.sh deploy/space
       - name: Push to Hugging Face
