@@ -1,7 +1,7 @@
 # Multilingual Bias Drift Benchmark — web app image
 # Prebuilt:  docker run --rm -p 127.0.0.1:8000:8000 -v mbdb-data:/data ghcr.io/dev-techt/multilingual-bias-drift-benchmark:latest
 # Build:     docker build -t mbdb .
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="multilingual-bias-drift-benchmark" \
